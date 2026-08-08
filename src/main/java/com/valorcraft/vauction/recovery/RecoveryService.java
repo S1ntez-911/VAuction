@@ -1,13 +1,14 @@
 package com.valorcraft.vauction.recovery;
 
 import com.valorcraft.vauction.application.AuctionService;
+import com.valorcraft.vauction.application.AuctionWorkLimits;
+import com.valorcraft.vauction.application.WorkBudget;
 import com.valorcraft.vauction.domain.delivery.AuctionDelivery;
 import com.valorcraft.vauction.domain.delivery.DeliveryState;
 import com.valorcraft.vauction.domain.order.Order;
 import com.valorcraft.vauction.domain.order.OrderSide;
 import com.valorcraft.vauction.domain.order.OrderProcessingState;
 import com.valorcraft.vauction.domain.trade.Trade;
-import com.valorcraft.vauction.domain.trade.TradeState;
 import com.valorcraft.vauction.economy.EconomyGateway;
 import com.valorcraft.vauction.persistence.DatabaseManager;
 import com.valorcraft.vauction.persistence.DeliveryRepository;
@@ -38,8 +39,6 @@ public final class RecoveryService {
 
     private static final Logger LOGGER = LogManager.getLogger("VAuction");
 
-    private static final int MAX_ACTIVE_ORDERS = 50_000;
-
     private final DatabaseManager database;
     private final OrderRepository orders;
     private final TradeRepository trades;
@@ -62,84 +61,170 @@ public final class RecoveryService {
 
     /** Итоги одного прохода. */
     public record ScanReport(int fillsFinished, int escrowsRestored, int claimsQuarantined,
-                             int ordersInManualReview) {
+                             int ordersInManualReview, int operationsAttempted,
+                             boolean backlogRemaining) {
 
         public int total() {
             return fillsFinished + escrowsRestored + claimsQuarantined + ordersInManualReview;
         }
     }
 
-    /** Полный проход; никогда не бросает исключений (логирует и продолжает). */
+    /** Compatibility entry point used by tests; production startup calls {@link #startupScan()}. */
     public ScanReport scan() {
-        int fillsFinished = 0;
-        int escrowsRestored = 0;
-        int claimsQuarantined = 0;
-        int manualReviews = 0;
+        return startupScan();
+    }
+
+    /**
+     * Deep startup reconciliation. It is allowed to inspect every active BUY, but only through
+     * keyset-paginated targeted queries. Database failures propagate so startup fails closed.
+     */
+    public ScanReport startupScan() {
+        Stats stats = new Stats();
+        pagePendingTrades(stats);
+        pageProcessingOrders(stats);
+        pageActiveBuys(stats);
+        pageClaimingDeliveries(stats);
+        return stats.report(false);
+    }
+
+    /** Bounded runtime recovery: pending trades, processing orders and CLAIMING only. */
+    public ScanReport runtimeSlice(WorkBudget budget) {
+        Stats stats = new Stats();
         try {
-            // 1. незавершённые fills (trade PENDING → деньги+фиксация)
-            List<Trade> pendingTrades = database.query(conn -> trades.findAll(conn)).stream()
-                    .filter(t -> t.state() == TradeState.PENDING)
-                    .toList();
-            for (Trade t : pendingTrades) {
-                if (auction.resumeFill(t)) {
-                    fillsFinished++;
-                }
+            int queryLimit = Math.min(AuctionWorkLimits.TARGETED_QUERY_BATCH,
+                    Math.min(AuctionWorkLimits.MAX_RUNTIME_RECOVERY_OPERATIONS,
+                            Math.max(1, budget.remaining())));
+            List<Trade> pending = database.query(c -> trades.findPending(c, queryLimit));
+            List<Order> processing = database.query(c -> orders.listProcessing(c, queryLimit));
+            List<AuctionDelivery> claiming = database.query(c ->
+                    deliveries.listByState(c, DeliveryState.CLAIMING, queryLimit));
+            int max = Math.max(pending.size(), Math.max(processing.size(), claiming.size()));
+            for (int i = 0; i < max && !budget.exhausted()
+                    && stats.operations < AuctionWorkLimits.MAX_RUNTIME_RECOVERY_OPERATIONS; i++) {
+                if (i < pending.size() && budget.tryAcquire()) recoverTrade(pending.get(i), stats);
+                if (stats.operations < AuctionWorkLimits.MAX_RUNTIME_RECOVERY_OPERATIONS
+                        && i < processing.size() && budget.tryAcquire()) recoverProcessing(processing.get(i), stats);
+                if (stats.operations < AuctionWorkLimits.MAX_RUNTIME_RECOVERY_OPERATIONS
+                        && i < claiming.size() && budget.tryAcquire()) recoverClaim(claiming.get(i), stats);
             }
-
-            // 2. Durable cancel/expiry sagas and ambiguous inventory mutations.
-            for (Order order : database.query(conn -> orders.listProcessing(conn, MAX_ACTIVE_ORDERS))) {
-                if (order.processingState() == OrderProcessingState.CANCEL
-                        || order.processingState() == OrderProcessingState.EXPIRE) {
-                    if (auction.resumePendingOrder(order.orderId())) {
-                        fillsFinished++;
-                    }
-                } else if (order.processingState() == OrderProcessingState.RESERVE) {
-                    BackingResult result = ensureEscrowBacking(order);
-                    if ((result == BackingResult.OK || result == BackingResult.RESTORED)
-                            && auction.activateReservedBuy(order.orderId()) != null) {
-                        if (result == BackingResult.RESTORED) {
-                            escrowsRestored++;
-                        }
-                    } else if (result == BackingResult.MANUAL_REVIEW) {
-                        manualReviews++;
-                    }
-                } else if (order.processingState() == OrderProcessingState.ITEM_LOCK) {
-                    auction.forceOrderManualReview(order.orderId(),
-                            "indeterminate SELL inventory lock after restart");
-                    manualReviews++;
-                }
+            boolean backlog = budget.exhausted()
+                    || pending.size() == queryLimit || processing.size() == queryLimit
+                    || claiming.size() == queryLimit;
+            ScanReport report = stats.report(backlog);
+            if (backlog) {
+                LOGGER.warn("VAuction recovery backlog remains after bounded slice (attempted={})",
+                        report.operationsAttempted());
             }
-
-            // 3. обеспечение активных BUY-заявок
-            for (Order order : database.query(conn -> orders.listActive(conn, MAX_ACTIVE_ORDERS))) {
-                if (order.side() != OrderSide.BUY) {
-                    continue;
-                }
-                BackingResult result = ensureEscrowBacking(order);
-                if (result == BackingResult.RESTORED) {
-                    escrowsRestored++;
-                } else if (result == BackingResult.MANUAL_REVIEW) {
-                    manualReviews++;
-                }
-            }
-
-            // 4. зависшие попытки выдачи: fail closed, без автоматического дюпа
-            for (AuctionDelivery d : database.query(conn ->
-                    deliveries.listByState(conn, DeliveryState.CLAIMING))) {
-                if (auction.quarantineClaim(d.deliveryId())) {
-                    claimsQuarantined++;
-                }
-            }
+            return report;
         } catch (RuntimeException e) {
-            LOGGER.error("Recovery scan прерван: {}", e.getMessage(), e);
+            LOGGER.error("Runtime recovery slice failed: {}", e.getMessage(), e);
+            return stats.report(true);
         }
-        ScanReport report = new ScanReport(fillsFinished, escrowsRestored, claimsQuarantined,
-                manualReviews);
-        if (report.total() > 0) {
-            LOGGER.info("RecoveryService: fills={}, escrows={}, claims={}, review={}",
-                    fillsFinished, escrowsRestored, claimsQuarantined, manualReviews);
+    }
+
+    private void pagePendingTrades(Stats stats) {
+        long cursorTime = Long.MIN_VALUE;
+        String cursorId = "";
+        while (true) {
+            long time = cursorTime;
+            String id = cursorId;
+            List<Trade> page = database.query(c -> trades.findPendingAfter(c, time, id,
+                    AuctionWorkLimits.STARTUP_PAGE_SIZE));
+            if (page.isEmpty()) return;
+            for (Trade trade : page) recoverTrade(trade, stats);
+            Trade last = page.get(page.size() - 1);
+            cursorTime = last.createdAt();
+            cursorId = last.tradeId().toString();
         }
-        return report;
+    }
+
+    private void pageProcessingOrders(Stats stats) {
+        long cursorTime = Long.MIN_VALUE;
+        String cursorId = "";
+        while (true) {
+            long time = cursorTime;
+            String id = cursorId;
+            List<Order> page = database.query(c -> orders.listProcessingAfter(c, time, id,
+                    AuctionWorkLimits.STARTUP_PAGE_SIZE));
+            if (page.isEmpty()) return;
+            for (Order order : page) recoverProcessing(order, stats);
+            Order last = page.get(page.size() - 1);
+            cursorTime = last.updatedAt();
+            cursorId = last.orderId().toString();
+        }
+    }
+
+    private void pageActiveBuys(Stats stats) {
+        long cursorTime = Long.MIN_VALUE;
+        String cursorId = "";
+        while (true) {
+            long time = cursorTime;
+            String id = cursorId;
+            List<Order> page = database.query(c -> orders.listActiveBuysAfter(c, time, id,
+                    AuctionWorkLimits.STARTUP_PAGE_SIZE));
+            if (page.isEmpty()) return;
+            for (Order order : page) {
+                stats.operations++;
+                BackingResult result = ensureEscrowBacking(order);
+                if (result == BackingResult.RESTORED) stats.escrows++;
+                if (result == BackingResult.MANUAL_REVIEW) stats.manual++;
+            }
+            Order last = page.get(page.size() - 1);
+            cursorTime = last.createdAt();
+            cursorId = last.orderId().toString();
+        }
+    }
+
+    private void pageClaimingDeliveries(Stats stats) {
+        long cursor = 0L;
+        while (true) {
+            long after = cursor;
+            List<AuctionDelivery> page = database.query(c -> deliveries.listByStateAfter(c,
+                    DeliveryState.CLAIMING, after, AuctionWorkLimits.STARTUP_PAGE_SIZE));
+            if (page.isEmpty()) return;
+            for (AuctionDelivery delivery : page) recoverClaim(delivery, stats);
+            cursor = page.get(page.size() - 1).deliveryId();
+        }
+    }
+
+    private void recoverTrade(Trade trade, Stats stats) {
+        stats.operations++;
+        if (auction.resumeFill(trade)) stats.fills++;
+    }
+
+    private void recoverProcessing(Order order, Stats stats) {
+        stats.operations++;
+        if (order.processingState() == OrderProcessingState.CANCEL
+                || order.processingState() == OrderProcessingState.EXPIRE) {
+            if (auction.resumePendingOrder(order.orderId())) stats.fills++;
+        } else if (order.processingState() == OrderProcessingState.RESERVE) {
+            BackingResult result = ensureEscrowBacking(order);
+            if ((result == BackingResult.OK || result == BackingResult.RESTORED)
+                    && auction.activateReservedBuy(order.orderId()) != null
+                    && result == BackingResult.RESTORED) stats.escrows++;
+            if (result == BackingResult.MANUAL_REVIEW) stats.manual++;
+        } else if (order.processingState() == OrderProcessingState.ITEM_LOCK) {
+            auction.forceOrderManualReview(order.orderId(),
+                    "indeterminate SELL inventory lock after restart");
+            stats.manual++;
+        }
+    }
+
+    private void recoverClaim(AuctionDelivery delivery, Stats stats) {
+        stats.operations++;
+        if (auction.quarantineClaim(delivery.deliveryId())) stats.claims++;
+    }
+
+    private static final class Stats {
+        int fills;
+        int escrows;
+        int claims;
+        int manual;
+        int operations;
+
+        ScanReport report(boolean backlog) {
+            return new ScanReport(fills, escrows, claims, manual, operations, backlog);
+        }
     }
 
     /**

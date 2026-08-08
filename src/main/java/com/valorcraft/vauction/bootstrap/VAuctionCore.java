@@ -115,7 +115,7 @@ public final class VAuctionCore {
                     core.deliveries, core.economyGateway, core.auctionService);
 
             // 6а. автоматическое восстановление после краха (идемпотентно)
-            RecoveryService.ScanReport recovery = core.recoveryService.scan();
+            RecoveryService.ScanReport recovery = core.recoveryService.startupScan();
             if (recovery.total() > 0) {
                 LOGGER.info("VAuction recovery: fills={}, escrows={}, claims={}, review={}",
                         recovery.fillsFinished(), recovery.escrowsRestored(),

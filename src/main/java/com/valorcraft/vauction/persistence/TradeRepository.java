@@ -144,6 +144,30 @@ public final class TradeRepository {
         }
     }
 
+    /** Indexed bounded recovery query; never materializes settled history. */
+    public List<Trade> findPending(Connection c, int limit) {
+        return findPendingAfter(c, Long.MIN_VALUE, "", limit);
+    }
+
+    /** Keyset page used by startup recovery. */
+    public List<Trade> findPendingAfter(Connection c, long createdAfter, String tradeIdAfter,
+                                        int limit) {
+        String sql = "SELECT " + COLUMNS + " FROM auction_trades "
+                + "WHERE state='PENDING' AND (created_at > ? OR (created_at = ? AND trade_id > ?)) "
+                + "ORDER BY created_at, trade_id LIMIT ?";
+        try (PreparedStatement ps = c.prepareStatement(sql)) {
+            ps.setLong(1, createdAfter);
+            ps.setLong(2, createdAfter);
+            ps.setString(3, tradeIdAfter == null ? "" : tradeIdAfter);
+            ps.setInt(4, Math.max(1, limit));
+            try (ResultSet rs = ps.executeQuery()) {
+                return mapAll(rs);
+            }
+        } catch (SQLException e) {
+            throw new DatabaseException("pending trades page failed", e);
+        }
+    }
+
     private static List<Trade> mapAll(ResultSet rs) throws SQLException {
         List<Trade> out = new ArrayList<>();
         while (rs.next()) {

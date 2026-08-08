@@ -40,7 +40,8 @@ public final class MigrationRunner {
             "V001__initial_schema.sql",
             "V002__buy_orders.sql",
             "V003__unified_market.sql",
-            "V004__order_processing_state.sql"
+            "V004__order_processing_state.sql",
+            "V005__bounded_work.sql"
     };
 
     private static final Logger LOGGER = LogManager.getLogger("VAuction");

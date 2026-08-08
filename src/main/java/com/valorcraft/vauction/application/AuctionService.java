@@ -23,6 +23,7 @@ import com.valorcraft.vauction.item.MarketKeyStrategy;
 import com.valorcraft.vauction.persistence.DatabaseManager;
 import com.valorcraft.vauction.persistence.DatabaseException;
 import com.valorcraft.vauction.persistence.DeliveryRepository;
+import com.valorcraft.vauction.persistence.MatchWorkRepository;
 import com.valorcraft.vauction.persistence.OperationRepository;
 import com.valorcraft.vauction.persistence.OrderRepository;
 import com.valorcraft.vauction.persistence.TradeRepository;
@@ -72,11 +73,11 @@ public final class AuctionService {
     private static final String ROLE_BUYER_REFUND = "buyer-refund";
     /** Верхний предел одного delivery; фактический предел учитывает max stack size предмета. */
     private static final int MAX_DELIVERY_CHUNK = 64;
-    private static final int BOOK_QUERY_LIMIT = 200;
     private static final long MILLIS_PER_DAY = 86_400_000L;
+    private static final long MATCH_RETRY_DELAY_MILLIS = 1_000L;
 
     public enum Result {
-        SUCCESS, NOT_A_PLAYER, ORDER_NOT_FOUND, NOT_YOUR_ORDER, SELF_TRADE,
+        SUCCESS, ACCEPTED_PENDING, NOT_A_PLAYER, ORDER_NOT_FOUND, NOT_YOUR_ORDER, SELF_TRADE,
         INVALID_QUANTITY, INVALID_PRICE, OVER_LIMIT, BLACKLISTED,
         INSUFFICIENT_FUNDS, INSUFFICIENT_ITEMS, INVENTORY_FULL,
         ECONOMY_FAILED, DATABASE_FAILED, MARKET_DISABLED
@@ -93,8 +94,12 @@ public final class AuctionService {
             return new Outcome(result, message, null, List.of());
         }
 
+        public static Outcome pending(String message, Order order) {
+            return new Outcome(Result.ACCEPTED_PENDING, message, order, List.of());
+        }
+
         public boolean isSuccess() {
-            return status == Result.SUCCESS;
+            return status == Result.SUCCESS || status == Result.ACCEPTED_PENDING;
         }
 
         /** Доля, исполненная мгновенным матчингом. */
@@ -108,6 +113,7 @@ public final class AuctionService {
     private final TradeRepository trades;
     private final OperationRepository operations;
     private final DeliveryRepository deliveries;
+    private final MatchWorkRepository matchWork = new MatchWorkRepository();
     private final ItemStackCodec codec;
     private final MarketKeyStrategy marketKeyFactory;
     private final EconomyGateway economy;
@@ -241,6 +247,7 @@ public final class AuctionService {
             order = created;
             database.inTransaction(conn -> {
                 orders.insert(conn, created);
+                matchWork.registerOrder(conn, orderId);
                 operations.insert(conn, operationEntry(OperationType.CREATE_BUY_ORDER,
                                 "op:create-buy:" + orderId, orderId, buyerId,
                                 OperationPhase.ESCROW_RESERVE, now)
@@ -263,8 +270,10 @@ public final class AuctionService {
             }
             if (r0.status() == EconomyGateway.ReserveStatus.CONFLICT) {
                 markCreateBuyFailed(orderId, r0.status().name());
+                return Outcome.fail(Result.ECONOMY_FAILED,
+                        "Reserve reference conflict; order requires manual review");
             }
-            return Outcome.fail(Result.ECONOMY_FAILED, "Не удалось зарезервировать средства");
+            return Outcome.pending("Reserve result is uncertain; recovery will continue the order", order);
         }
 
         order = activateReservedBuy(orderId);
@@ -273,35 +282,16 @@ public final class AuctionService {
                     "Резерв создан, активация BUY будет завершена recovery");
         }
 
-        List<Order> resting = database.query(conn ->
-                orders.bestSells(conn, key, pricePerUnit, BOOK_QUERY_LIMIT));
-        List<Trade> fills = new ArrayList<>();
-        int need = quantity;
-        Order cur = order;
-        for (Order sellOrder : resting) {
-            if (need <= 0 || cur == null || !cur.isActive()) {
-                break;
-            }
-            if (sellOrder.ownerUuid().equals(buyerId) && !settings.allowSelfPurchase()) {
-                continue;
-            }
-            int chunk = Math.min(need, sellOrder.remainingQuantity());
-            if (chunk <= 0) {
-                continue;
-            }
-            Trade fill = executeFill(cur, sellOrder, chunk, sellOrder.pricePerUnit(),
-                    OrderSide.SELL, now);
-            if (fill == null) {
-                break;
-            }
-            fills.add(fill);
-            need -= chunk;
-            // #3: свежий объект buy-ордера — версия и эпоха escrow устаревают
-            UUID curOrderId = cur.orderId();
-            cur = database.query(c -> orders.findById(c, curOrderId).orElse(null));
-        }
+        MatchingReport matching = pumpMatching(
+                WorkBudget.timed(AuctionWorkLimits.MAX_MATCH_OPERATIONS_PER_PUMP,
+                        AuctionWorkLimits.MAX_MAINTENANCE_NANOS),
+                AuctionWorkLimits.MAX_MATCH_FILLS_PER_PUMP);
+        List<Trade> fills = matching.trades().stream()
+                .filter(t -> t.buyOrderId().equals(orderId) || t.sellOrderId().equals(orderId))
+                .toList();
         completeOp("create-buy-" + orderId);
-        Order finalOrder = cur == null ? order : cur;
+        Order refreshed = database.query(c -> orders.findById(c, orderId).orElse(null));
+        Order finalOrder = refreshed == null ? order : refreshed;
         return new Outcome(Result.SUCCESS,
                 fills.isEmpty() ? "Заявка размещена: " + orderId : "Заявка исполнена: " + orderId,
                 finalOrder, fills);
@@ -348,10 +338,14 @@ public final class AuctionService {
             order = created;
             database.inTransaction(conn -> {
                 orders.insert(conn, created);
+                matchWork.registerOrder(conn, orderId);
                 operations.insert(conn, operationEntry(OperationType.CREATE_SELL_ORDER,
                                 "op:create-sell:" + orderId, orderId, sellerId,
                                 lockInventory ? OperationPhase.ITEM_LOCK : OperationPhase.COMPLETE, now)
                         .operationId("create-sell-" + orderId).build());
+                if (!lockInventory) {
+                    matchWork.enqueue(conn, orderId, now);
+                }
                 return null;
             });
         } catch (RuntimeException e) {
@@ -375,6 +369,7 @@ public final class AuctionService {
                     if (!orders.applyState(conn, pending, active)) {
                         throw new DatabaseException("SELL item-lock activation conflict " + orderId);
                     }
+                    matchWork.enqueue(conn, orderId, now());
                     return orders.findById(conn, orderId).orElseThrow();
                 });
             } catch (RuntimeException e) {
@@ -382,35 +377,16 @@ public final class AuctionService {
             }
         }
 
-        List<Order> resting = database.query(conn ->
-                orders.bestBuys(conn, key, pricePerUnit, BOOK_QUERY_LIMIT));
-        List<Trade> fills = new ArrayList<>();
-        int need = quantity;
-        Order cur = order;
-        for (Order buyOrder : resting) {
-            if (need <= 0 || cur == null || !cur.isActive()) {
-                break;
-            }
-            if (buyOrder.ownerUuid().equals(sellerId) && !settings.allowSelfPurchase()) {
-                continue;
-            }
-            int chunk = Math.min(need, buyOrder.remainingQuantity());
-            if (chunk <= 0) {
-                continue;
-            }
-            Trade fill = executeFill(buyOrder, cur, chunk, buyOrder.pricePerUnit(),
-                    OrderSide.BUY, now);
-            if (fill == null) {
-                break;
-            }
-            fills.add(fill);
-            need -= chunk;
-            // #3 свежий объект основной стороны (taker)
-            UUID curOrderId = cur.orderId();
-            cur = database.query(c -> orders.findById(c, curOrderId).orElse(null));
-        }
+        MatchingReport matching = pumpMatching(
+                WorkBudget.timed(AuctionWorkLimits.MAX_MATCH_OPERATIONS_PER_PUMP,
+                        AuctionWorkLimits.MAX_MAINTENANCE_NANOS),
+                AuctionWorkLimits.MAX_MATCH_FILLS_PER_PUMP);
+        List<Trade> fills = matching.trades().stream()
+                .filter(t -> t.buyOrderId().equals(orderId) || t.sellOrderId().equals(orderId))
+                .toList();
         completeOp("create-sell-" + orderId);
-        Order finalOrder = cur != null ? cur : order;
+        Order refreshed = database.query(c -> orders.findById(c, orderId).orElse(null));
+        Order finalOrder = refreshed == null ? order : refreshed;
         return new Outcome(Result.SUCCESS, "Ордер размещён: " + orderId, finalOrder, fills);
     }
 
@@ -422,6 +398,69 @@ public final class AuctionService {
      * Возвращает Trade или {@code null} при сбое одного из шагов
      * (повтор этого же fill — идемпотентен через tradeId и escrow-ref).
      */
+    public record MatchingReport(List<Trade> trades, int operationsAttempted,
+                                 boolean backlogRemaining) {}
+
+    /** Continue durable FIFO matching within both a hard operation budget and a fill cap. */
+    public MatchingReport pumpMatching(WorkBudget budget, int maxFills) {
+        List<Trade> completed = new ArrayList<>();
+        int attempted = 0;
+        while (completed.size() < Math.max(0, maxFills)
+                && attempted < AuctionWorkLimits.MAX_MATCH_OPERATIONS_PER_PUMP
+                && budget.tryAcquire()) {
+            long attemptNow = now();
+            MatchWorkRepository.MatchWork work = database.query(c ->
+                    matchWork.pollReady(c, attemptNow).orElse(null));
+            if (work == null) {
+                break;
+            }
+            attempted++;
+            Order incoming = database.query(c -> orders.findById(c, work.orderId()).orElse(null));
+            if (incoming == null || !incoming.isActive()) {
+                database.inTransaction(c -> { matchWork.delete(c, work.workId()); return null; });
+                continue;
+            }
+            if (incoming.processingState() != OrderProcessingState.NONE) {
+                database.inTransaction(c -> {
+                    matchWork.defer(c, work.workId(), attemptNow + MATCH_RETRY_DELAY_MILLIS);
+                    return null;
+                });
+                continue;
+            }
+            Order counterpart = database.query(c -> orders.bestCounterpart(c, incoming.marketKey(),
+                    incoming.side(), incoming.pricePerUnit(), incoming.ownerUuid(),
+                    settings.allowSelfPurchase(), incoming.orderId()).orElse(null));
+            if (counterpart == null) {
+                database.inTransaction(c -> { matchWork.delete(c, work.workId()); return null; });
+                continue;
+            }
+            int chunk = Math.min(incoming.remainingQuantity(), counterpart.remainingQuantity());
+            Order buy = incoming.side() == OrderSide.BUY ? incoming : counterpart;
+            Order sell = incoming.side() == OrderSide.SELL ? incoming : counterpart;
+            Trade fill = executeFill(buy, sell, chunk, counterpart.pricePerUnit(),
+                    counterpart.side(), attemptNow);
+            if (fill == null) {
+                database.inTransaction(c -> {
+                    matchWork.defer(c, work.workId(), attemptNow + MATCH_RETRY_DELAY_MILLIS);
+                    return null;
+                });
+                continue;
+            }
+            completed.add(fill);
+            Order refreshed = database.query(c -> orders.findById(c, work.orderId()).orElse(null));
+            database.inTransaction(c -> {
+                if (refreshed == null || !refreshed.isActive()) {
+                    matchWork.delete(c, work.workId());
+                } else {
+                    matchWork.readyNow(c, work.workId(), now());
+                }
+                return null;
+            });
+        }
+        boolean backlog = database.query(matchWork::hasAny);
+        return new MatchingReport(List.copyOf(completed), attempted, backlog);
+    }
+
     private Trade executeFill(Order buyOrder, Order sellOrder, int chunk,
                               long makerPrice, OrderSide makerSide, long now) {
         if (buyOrder.escrowReference() == null || buyOrder.escrowReference().isBlank()) {
@@ -684,28 +723,38 @@ public final class AuctionService {
     // ================================================================ expiry
 
     public int expirePass(long now) {
-        int processed = 0;
+        return expireSlice(now, WorkBudget.operations(AuctionWorkLimits.MAX_EXPIRY_OPERATIONS)).completed();
+    }
+
+    public record ExpiryReport(int completed, int operationsAttempted, boolean backlogRemaining) {}
+
+    public ExpiryReport expireSlice(long now, WorkBudget budget) {
+        List<Order> candidates = new ArrayList<>();
+        int fetchLimit = AuctionWorkLimits.MAX_EXPIRY_OPERATIONS + 1;
         if (settings.sellOrderExpiryDays() > 0) {
             long sellCutoff = now - (long) settings.sellOrderExpiryDays() * MILLIS_PER_DAY;
-            List<Order> sells = database.query(c ->
-                    orders.oldestActive(c, OrderSide.SELL, sellCutoff, BOOK_QUERY_LIMIT));
-            for (Order o : sells) {
-                if (beginExpiry(o, now) && resumePendingOrder(o.orderId())) {
-                    processed++;
-                }
-            }
+            candidates.addAll(database.query(c ->
+                    orders.oldestActive(c, OrderSide.SELL, sellCutoff, fetchLimit)));
         }
         if (settings.buyOrderExpiryDays() > 0) {
             long buyCutoff = now - (long) settings.buyOrderExpiryDays() * MILLIS_PER_DAY;
-            List<Order> buys = database.query(c ->
-                    orders.oldestActive(c, OrderSide.BUY, buyCutoff, BOOK_QUERY_LIMIT));
-            for (Order o : buys) {
-                if (beginExpiry(o, now) && resumePendingOrder(o.orderId())) {
-                    processed++;
-                }
+            candidates.addAll(database.query(c ->
+                    orders.oldestActive(c, OrderSide.BUY, buyCutoff, fetchLimit)));
+        }
+        candidates.sort(java.util.Comparator.comparingLong(Order::createdAt)
+                .thenComparing(o -> o.orderId().toString()));
+        int completed = 0;
+        int attempted = 0;
+        for (Order order : candidates) {
+            if (attempted >= AuctionWorkLimits.MAX_EXPIRY_OPERATIONS || !budget.tryAcquire()) {
+                break;
+            }
+            attempted++;
+            if (beginExpiry(order, now) && resumePendingOrder(order.orderId())) {
+                completed++;
             }
         }
-        return processed;
+        return new ExpiryReport(completed, attempted, candidates.size() > attempted);
     }
 
     private boolean beginExpiry(Order order, long now) {
@@ -787,6 +836,7 @@ public final class AuctionService {
                     fresh.withProcessingState(OrderProcessingState.NONE, now()))) {
                 return null;
             }
+            matchWork.enqueue(conn, orderId, fresh.createdAt());
             return orders.findById(conn, orderId).orElse(null);
         });
     }

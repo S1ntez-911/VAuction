@@ -221,6 +221,7 @@ class AuctionServiceTest {
         ItemStack item = new ItemStack(Items.COPPER_INGOT, 1);
         service.createSellOrder(UUID.randomUUID(), item, 10, 5);
         service.createBuyOrder(buyer, item, 10, 5);
+        service.pumpMatching(WorkBudget.operations(16), 8);
         assertEquals(1, db.query(c -> trades.findAll(c)).stream()
                 .filter(t -> t.state() == TradeState.PENDING).count());
 
@@ -267,11 +268,18 @@ class AuctionServiceTest {
 
         AuctionService.Outcome sell = service.createSellOrder(UUID.randomUUID(), item, 30, 100);
         assertTrue(sell.isSuccess());
-        assertEquals(2, sell.trades().size());
-        assertEquals(List.of(35L, 34L), sell.trades().stream()
+        List<com.valorcraft.vauction.domain.trade.Trade> fills = new ArrayList<>(sell.trades());
+        Order current = db.query(c -> orders.findById(c, sell.order().orderId())).orElseThrow();
+        while (current.isActive()) {
+            fills.addAll(service.pumpMatching(WorkBudget.operations(16), 8).trades().stream()
+                    .filter(t -> t.sellOrderId().equals(sell.order().orderId())).toList());
+            current = db.query(c -> orders.findById(c, sell.order().orderId())).orElseThrow();
+        }
+        assertEquals(2, fills.size());
+        assertEquals(List.of(35L, 34L), fills.stream()
                 .map(t -> t.executionPrice()).toList());
-        assertEquals(100, sell.filledQuantity());
-        assertEquals(OrderStatus.FILLED, sell.order().status());
+        assertEquals(100, fills.stream().mapToInt(t -> t.quantity()).sum());
+        assertEquals(OrderStatus.FILLED, current.status());
     }
 
     @Test
@@ -343,7 +351,10 @@ class AuctionServiceTest {
         ItemStack item = new ItemStack(Items.COPPER_INGOT, 1);
 
         AuctionService.Outcome outcome = service.createBuyOrder(buyer, item, 10, 10);
-        assertEquals(AuctionService.Result.ECONOMY_FAILED, outcome.status());
+        assertEquals(AuctionService.Result.ACCEPTED_PENDING, outcome.status());
+        assertTrue(outcome.isSuccess());
+        assertEquals(outcome.order().orderId(),
+                db.query(c -> orders.listProcessing(c, 10)).get(0).orderId());
         Order pending = db.query(c -> orders.listProcessing(c, 10)).get(0);
         assertEquals(OrderProcessingState.RESERVE, pending.processingState());
         assertTrue(db.query(c -> orders.bestBuys(c, pending.marketKey(), 1, 10)).isEmpty());
@@ -353,6 +364,139 @@ class AuctionServiceTest {
         Order active = db.query(c -> orders.findById(c, pending.orderId())).orElseThrow();
         assertEquals(OrderProcessingState.NONE, active.processingState());
         assertEquals(OrderStatus.ACTIVE, active.status());
+    }
+
+    @Test
+    void largeCrossIsBoundedPerPumpAndEventuallyCompletesFromDurableQueue() {
+        ItemStack item = new ItemStack(Items.COPPER_INGOT, 1);
+        for (int i = 0; i < 500; i++) {
+            assertTrue(service.createSellOrder(UUID.randomUUID(), item, 10, 1).isSuccess());
+        }
+        UUID buyer = UUID.randomUUID();
+        economy.balances.put(buyer, 10_000L);
+
+        AuctionService.Outcome placed = service.createBuyOrder(buyer, item, 10, 500);
+        assertTrue(placed.trades().size() <= AuctionWorkLimits.MAX_MATCH_FILLS_PER_PUMP);
+
+        // Simulate restart between batches: continuation lives in SQLite, not in service memory.
+        ItemStackCodec codec = new ItemStackCodec(262_144, 2_097_152);
+        service = new AuctionService(db, orders, trades, new OperationRepository(), deliveries,
+                codec, new ExactItemMarketKeyStrategy(codec), economy, inventory,
+                AuctionSettings.defaults());
+        int pumps = 1;
+        while (db.query(c -> orders.findById(c, placed.order().orderId())).orElseThrow().isActive()) {
+            AuctionService.MatchingReport report = service.pumpMatching(
+                    WorkBudget.operations(AuctionWorkLimits.MAX_MATCH_OPERATIONS_PER_PUMP),
+                    AuctionWorkLimits.MAX_MATCH_FILLS_PER_PUMP);
+            assertTrue(report.trades().size() <= AuctionWorkLimits.MAX_MATCH_FILLS_PER_PUMP);
+            assertTrue(report.operationsAttempted() <= AuctionWorkLimits.MAX_MATCH_OPERATIONS_PER_PUMP);
+            assertTrue(pumps++ < 100, "durable matching queue did not converge");
+        }
+        Order filled = db.query(c -> orders.findById(c, placed.order().orderId())).orElseThrow();
+        assertEquals(OrderStatus.FILLED, filled.status());
+        assertEquals(500, filled.filledQuantity());
+        assertEquals(500, db.query(trades::findAll).size());
+        assertEquals(500, db.query(c -> deliveries.listByState(c, DeliveryState.CLAIMABLE))
+                .stream().mapToInt(d -> d.item().quantity()).sum());
+        assertEquals(5_000L, economy.balances.entrySet().stream()
+                .filter(e -> !e.getKey().equals(buyer) && !e.getKey().equals(economy.treasury))
+                .mapToLong(Map.Entry::getValue).sum());
+        assertEquals(5_000L, economy.getBalance(buyer));
+        assertTrue(economy.escrows.values().stream()
+                .allMatch(e -> e.state() == EconomyGateway.HoldingState.CAPTURED));
+        assertFalse(db.query(new com.valorcraft.vauction.persistence.MatchWorkRepository()::hasAny));
+    }
+
+    @Test
+    void expiryBurstUsesHardBudgetAndReportsContinuation() {
+        ItemStack item = new ItemStack(Items.COPPER_INGOT, 1);
+        for (int i = 0; i < 1_000; i++) {
+            service.createSellOrder(UUID.randomUUID(), item, 10, 1);
+        }
+        AuctionService.ExpiryReport first = service.expireSlice(Long.MAX_VALUE,
+                WorkBudget.operations(100));
+        assertEquals(AuctionWorkLimits.MAX_EXPIRY_OPERATIONS, first.operationsAttempted());
+        assertEquals(AuctionWorkLimits.MAX_EXPIRY_OPERATIONS, first.completed());
+        assertTrue(first.backlogRemaining());
+        int completed = first.completed();
+        int slices = 1;
+        while (!db.query(c -> orders.listActive(c, 1)).isEmpty()) {
+            AuctionService.ExpiryReport next = service.expireSlice(Long.MAX_VALUE,
+                    WorkBudget.operations(100));
+            assertTrue(next.operationsAttempted() <= AuctionWorkLimits.MAX_EXPIRY_OPERATIONS);
+            completed += next.completed();
+            assertTrue(slices++ < 130, "expiry continuation did not converge");
+        }
+        assertEquals(1_000, completed);
+    }
+
+    @Test
+    void runtimeRecoveryIsBoundedAndDoesNotRunDeepActiveBuyAudit() {
+        economy.transientReserveFailures = 20;
+        ItemStack item = new ItemStack(Items.COPPER_INGOT, 1);
+        for (int i = 0; i < 20; i++) {
+            UUID buyer = UUID.randomUUID();
+            economy.balances.put(buyer, 10_000L);
+            assertEquals(AuctionService.Result.ACCEPTED_PENDING,
+                    service.createBuyOrder(buyer, item, 10, 1).status());
+        }
+        RecoveryService recovery = new RecoveryService(db, orders, trades, deliveries, economy, service);
+        RecoveryService.ScanReport report = recovery.runtimeSlice(WorkBudget.operations(100));
+        assertEquals(AuctionWorkLimits.MAX_RUNTIME_RECOVERY_OPERATIONS,
+                report.operationsAttempted());
+        assertTrue(report.backlogRemaining());
+        assertEquals(12, db.query(c -> orders.listProcessing(c, 100)).size());
+    }
+
+    @Test
+    void runtimeRecoveryDoesNotAuditTenThousandHealthyActiveBuys() {
+        UUID owner = UUID.randomUUID();
+        db.inTransaction(c -> {
+            String sql = "WITH RECURSIVE seq(x) AS (VALUES(1) UNION ALL SELECT x+1 FROM seq "
+                    + "WHERE x<10000) INSERT INTO auction_orders (order_id,owner_uuid,side,status,"
+                    + "market_key,item_blob,item_codec_version,item_hash,item_registry_id,"
+                    + "item_display_name,item_search_name,item_snapshot_qty,price_per_unit,"
+                    + "original_quantity,remaining_quantity,filled_quantity,escrow_reference,"
+                    + "ref_epoch,created_at,updated_at,version,processing_state) SELECT "
+                    + "printf('00000000-0000-0000-0000-%012d',x),?,'BUY','ACTIVE','load:key',"
+                    + "X'00','test','hash','minecraft:stone','Stone','stone',1,10,1,1,0,"
+                    + "('load-ref-' || x),0,x,x,0,'NONE' FROM seq";
+            try (var ps = c.prepareStatement(sql)) {
+                ps.setString(1, owner.toString());
+                ps.executeUpdate();
+            }
+            return null;
+        });
+
+        RecoveryService recovery = new RecoveryService(db, orders, trades, deliveries, economy, service);
+        RecoveryService.ScanReport report = recovery.runtimeSlice(WorkBudget.operations(100));
+        assertEquals(0, report.operationsAttempted());
+        assertEquals(0, economy.findCalls);
+    }
+
+    @Test
+    void oneHundredPendingTradesRecoverInBoundedSlices() {
+        ItemStack item = new ItemStack(Items.COPPER_INGOT, 1);
+        economy.transientSettleFailures = 100;
+        for (int i = 0; i < 100; i++) {
+            service.createSellOrder(UUID.randomUUID(), item, 10, 1);
+            UUID buyer = UUID.randomUUID();
+            economy.balances.put(buyer, 100L);
+            service.createBuyOrder(buyer, item, 10, 1);
+            service.pumpMatching(WorkBudget.operations(16), 8);
+        }
+        assertEquals(100, db.query(c -> trades.findPending(c, 200)).size());
+
+        RecoveryService recovery = new RecoveryService(db, orders, trades, deliveries, economy, service);
+        int slices = 0;
+        while (!db.query(c -> trades.findPending(c, 1)).isEmpty()) {
+            RecoveryService.ScanReport report = recovery.runtimeSlice(WorkBudget.operations(100));
+            assertTrue(report.operationsAttempted()
+                    <= AuctionWorkLimits.MAX_RUNTIME_RECOVERY_OPERATIONS);
+            assertTrue(slices++ < 30, "recovery continuation did not converge");
+        }
+        assertEquals(100, db.query(trades::findAll).stream()
+                .filter(t -> t.state() == TradeState.SETTLED).count());
     }
 
     @Test
@@ -501,6 +645,7 @@ class AuctionServiceTest {
         boolean failRelease;
         int transientReserveFailures;
         int transientSettleFailures;
+        int findCalls;
         boolean captureButReportFailureOnce;
 
         long reservedAmount(String ref) {
@@ -637,6 +782,7 @@ class AuctionServiceTest {
 
         @Override
         public LookupResult find(String referenceId) {
+            findCalls++;
             Escrow escrow = escrows.get(referenceId);
             return escrow == null ? LookupResult.notFound()
                     : new LookupResult(LookupStatus.FOUND,

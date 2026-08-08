@@ -78,7 +78,7 @@ class DatabaseTest {
         Set<String> tables = db.query(this::readTables);
         assertEquals(Set.of("auction_listings", "auction_buy_orders", "auction_deliveries",
                 "auction_sales", "auction_operation_log", "auction_orders", "auction_trades",
-                "schema_version"), tables);
+                "auction_order_acceptance", "auction_match_queue", "schema_version"), tables);
         assertTrue(db.schemaVersion() >= 1, "schema version must be >= 1");
     }
 
@@ -112,7 +112,7 @@ class DatabaseTest {
             });
 
             MigrationRunner.Result result = source.query(MigrationRunner::run);
-            assertEquals(4, result.schemaVersion());
+            assertEquals(5, result.schemaVersion());
             String phase = source.query(c -> {
                 try (Statement st = c.createStatement();
                      ResultSet rs = st.executeQuery(
@@ -125,6 +125,125 @@ class DatabaseTest {
         } finally {
             source.close();
         }
+    }
+
+    @Test
+    void populatedV004UpgradesToV005AndSeedsDurableMatchingQueue() {
+        SqliteJdbcSource source = new SqliteJdbcSource("jdbc:sqlite::memory:");
+        source.open();
+        try {
+            Order existing = order(OrderSide.SELL, 32, 5, 123L);
+            source.inTransaction(c -> {
+                applyResource(c, "vauction/migrations/V001__initial_schema.sql");
+                applyResource(c, "vauction/migrations/V002__buy_orders.sql");
+                applyResource(c, "vauction/migrations/V003__unified_market.sql");
+                applyResource(c, "vauction/migrations/V004__order_processing_state.sql");
+                try (Statement st = c.createStatement()) {
+                    st.execute("CREATE TABLE schema_version (version INTEGER PRIMARY KEY, "
+                            + "description VARCHAR(255) NOT NULL, checksum VARCHAR(64) NOT NULL, "
+                            + "applied_at BIGINT NOT NULL)");
+                    for (int version = 1; version <= 4; version++) {
+                        st.execute("INSERT INTO schema_version VALUES (" + version
+                                + ",'legacy','legacy',1)");
+                    }
+                }
+                new OrderRepository().insert(c, existing);
+                return null;
+            });
+
+            MigrationRunner.Result result = source.query(MigrationRunner::run);
+            assertEquals(5, result.schemaVersion());
+            assertEquals(List.of("V005__bounded_work.sql"), result.appliedFiles());
+            int acceptedRows = source.query(c -> {
+                try (Statement st = c.createStatement(); ResultSet rs = st.executeQuery(
+                        "SELECT COUNT(*) FROM auction_order_acceptance")) {
+                    return rs.next() ? rs.getInt(1) : 0;
+                }
+            });
+            assertEquals(1, acceptedRows);
+            assertEquals(existing.orderId(), source.query(c ->
+                    new MatchWorkRepository().pollReady(c, Long.MAX_VALUE).orElseThrow().orderId()));
+        } finally {
+            source.close();
+        }
+    }
+
+    @Test
+    void pendingRecoveryQueryStaysIndexedWithOneHundredThousandSettledTrades() {
+        OrderRepository orderRepo = new OrderRepository();
+        Order buy = order(OrderSide.BUY, 10, 1, 1);
+        Order sell = order(OrderSide.SELL, 10, 1, 1);
+        db.inTransaction(c -> {
+            orderRepo.insert(c, buy);
+            orderRepo.insert(c, sell);
+            String bulk = "WITH RECURSIVE seq(x) AS (VALUES(1) UNION ALL "
+                    + "SELECT x+1 FROM seq WHERE x<100000) "
+                    + "INSERT INTO auction_trades (trade_id,market_key,buy_order_id,sell_order_id,"
+                    + "maker_side,execution_price,quantity,gross_minor,commission_minor,"
+                    + "seller_net_minor,buyer_uuid,seller_uuid,escrow_reference,state,created_at,"
+                    + "settled_at,version) SELECT printf('settled-%06d',x),'exact:key',?,?,'SELL',"
+                    + "10,1,10,0,10,?,?,('bulk-ref-' || x),'SETTLED',x,x,0 FROM seq";
+            try (PreparedStatement ps = c.prepareStatement(bulk)) {
+                ps.setString(1, buy.orderId().toString());
+                ps.setString(2, sell.orderId().toString());
+                ps.setString(3, buy.ownerUuid().toString());
+                ps.setString(4, sell.ownerUuid().toString());
+                ps.executeUpdate();
+            }
+            String pending = "INSERT INTO auction_trades (trade_id,market_key,buy_order_id,"
+                    + "sell_order_id,maker_side,execution_price,quantity,gross_minor,commission_minor,"
+                    + "seller_net_minor,buyer_uuid,seller_uuid,escrow_reference,state,created_at,version) "
+                    + "VALUES (?,?,?,?, 'SELL',10,1,10,0,10,?,?,?,'PENDING',?,0)";
+            try (PreparedStatement ps = c.prepareStatement(pending)) {
+                for (int i = 0; i < 3; i++) {
+                    ps.setString(1, UUID.randomUUID().toString());
+                    ps.setString(2, "exact:key");
+                    ps.setString(3, buy.orderId().toString());
+                    ps.setString(4, sell.orderId().toString());
+                    ps.setString(5, buy.ownerUuid().toString());
+                    ps.setString(6, sell.ownerUuid().toString());
+                    ps.setString(7, "pending-ref-" + i);
+                    ps.setLong(8, 100_001L + i);
+                    ps.addBatch();
+                }
+                ps.executeBatch();
+            }
+            return null;
+        });
+
+        List<com.valorcraft.vauction.domain.trade.Trade> pending = db.query(c ->
+                new TradeRepository().findPending(c, 32));
+        assertEquals(3, pending.size());
+        String plan = db.query(c -> {
+            try (Statement st = c.createStatement(); ResultSet rs = st.executeQuery(
+                    "EXPLAIN QUERY PLAN SELECT trade_id FROM auction_trades "
+                            + "WHERE state='PENDING' ORDER BY created_at,trade_id LIMIT 32")) {
+                StringBuilder out = new StringBuilder();
+                while (rs.next()) out.append(rs.getString("detail"));
+                return out.toString();
+            }
+        });
+        assertTrue(plan.contains("idx_trades_pending"), plan);
+    }
+
+    @Test
+    void boundedMaintenanceQueriesUseV005Indexes() {
+        assertPlanUses("SELECT work_id FROM auction_match_queue WHERE next_attempt_at<=1 "
+                + "ORDER BY next_attempt_at,created_at,work_id LIMIT 1", "idx_match_queue_ready");
+        assertPlanUses("SELECT order_id FROM auction_orders WHERE market_key='k' AND side='SELL' "
+                + "AND status='ACTIVE' AND processing_state='NONE' AND price_per_unit<=10 "
+                + "AND EXISTS (SELECT 1 FROM auction_order_acceptance maker_seq, "
+                + "auction_order_acceptance incoming_seq WHERE maker_seq.order_id=auction_orders.order_id "
+                + "AND incoming_seq.order_id='incoming' AND maker_seq.sequence<incoming_seq.sequence) "
+                + "ORDER BY price_per_unit,created_at,order_id LIMIT 1",
+                "idx_orders_match");
+        assertPlanUses("SELECT order_id FROM auction_orders WHERE side='SELL' AND status='ACTIVE' "
+                + "AND processing_state='NONE' AND created_at<=10 ORDER BY created_at LIMIT 9",
+                "idx_orders_expiry");
+        assertPlanUses("SELECT order_id FROM auction_orders WHERE processing_state<>'NONE' "
+                + "ORDER BY updated_at,order_id LIMIT 32", "idx_orders_processing_cursor");
+        assertPlanUses("SELECT delivery_id FROM auction_deliveries WHERE state='CLAIMING' "
+                + "ORDER BY delivery_id LIMIT 32", "idx_deliveries_state");
     }
 
     /* ------------------------------ unified order book ------------------------------ */
@@ -479,6 +598,18 @@ class DatabaseTest {
     }
 
     /* ------------------------------ helpers ------------------------------ */
+
+    private void assertPlanUses(String sql, String index) {
+        String plan = db.query(c -> {
+            try (Statement st = c.createStatement();
+                 ResultSet rs = st.executeQuery("EXPLAIN QUERY PLAN " + sql)) {
+                StringBuilder out = new StringBuilder();
+                while (rs.next()) out.append(rs.getString("detail")).append('\n');
+                return out.toString();
+            }
+        });
+        assertTrue(plan.contains(index), plan);
+    }
 
     private Set<String> readTables(Connection c) throws SQLException {
         Set<String> tables = new LinkedHashSet<>();
