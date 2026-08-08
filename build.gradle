@@ -1,0 +1,93 @@
+plugins {
+    id 'java'
+    id 'net.minecraftforge.gradle' version '6.0.54'
+}
+
+version = mod_version
+group = 'com.valorcraft.exchange'
+
+base {
+    archivesName = 'ResourceExchange-1.20.1'
+}
+
+java {
+    toolchain {
+        languageVersion = JavaLanguageVersion.of(17)
+    }
+    withSourcesJar()
+}
+
+minecraft {
+    mappings channel: 'official', version: "${minecraft_version}"
+
+    runs {
+        client {
+            workingDirectory project.file('run')
+            property 'forge.logging.console.level', 'debug'
+            mods {
+                resource_exchange {
+                    source sourceSets.main
+                }
+            }
+        }
+        server {
+            workingDirectory project.file('run')
+            property 'forge.logging.console.level', 'debug'
+            mods {
+                resource_exchange {
+                    source sourceSets.main
+                }
+            }
+        }
+    }
+}
+
+repositories {
+    mavenCentral()
+    // VEconomy собирается из соседнего проекта; jar кладётся в libs/ как
+    // veconomy-1.0.0.jar (compile-only, в финальный jar не попадает).
+    flatDir { dirs 'libs' }
+}
+
+dependencies {
+    minecraft "net.minecraftforge:forge:${minecraft_version}-${forge_version}"
+
+    compileOnly fg.deobf(group: 'local', name: 'veconomy', version: '1.0.0')
+    runtimeOnly fg.deobf(group: 'local', name: 'veconomy', version: '1.0.0')
+
+    testImplementation 'org.junit.jupiter:junit-jupiter-api:5.10.2'
+    testRuntimeOnly 'org.junit.jupiter:junit-jupiter-engine:5.10.2'
+}
+
+test {
+    useJUnitPlatform()
+    testLogging {
+        events "passed", "failed", "skipped"
+    }
+}
+
+processResources {
+    inputs.property 'version', project.version
+    filesMatching('META-INF/mods.toml') {
+        expand version: project.version
+    }
+}
+
+tasks.withType(JavaCompile).configureEach {
+    options.encoding = 'UTF-8'
+}
+
+jar {
+    preserveFileTimestamps = false
+    reproducibleFileOrder = true
+    manifest {
+        attributes([
+                'Specification-Title'   : 'ResourceExchange',
+                'Specification-Version' : project.version,
+                'Specification-Vendor'  : 'ValorCraft',
+                'Implementation-Title'  : 'ResourceExchange',
+                'Implementation-Version': project.jar.archiveVersion,
+                'Implementation-Vendor': 'ValorCraft'
+        ])
+    }
+}
