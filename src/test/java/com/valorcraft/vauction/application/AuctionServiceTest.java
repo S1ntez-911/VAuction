@@ -370,12 +370,12 @@ class AuctionServiceTest {
     void largeCrossIsBoundedPerPumpAndEventuallyCompletesFromDurableQueue() {
         ItemStack item = new ItemStack(Items.COPPER_INGOT, 1);
         for (int i = 0; i < 500; i++) {
-            assertTrue(service.createSellOrder(UUID.randomUUID(), item, 10, 1).isSuccess());
+            assertTrue(service.createSellOrder(UUID.randomUUID(), item, 32, 1).isSuccess());
         }
         UUID buyer = UUID.randomUUID();
-        economy.balances.put(buyer, 10_000L);
+        economy.balances.put(buyer, 20_000L);
 
-        AuctionService.Outcome placed = service.createBuyOrder(buyer, item, 10, 500);
+        AuctionService.Outcome placed = service.createBuyOrder(buyer, item, 35, 500);
         assertTrue(placed.trades().size() <= AuctionWorkLimits.MAX_MATCH_FILLS_PER_PUMP);
 
         // Simulate restart between batches: continuation lives in SQLite, not in service memory.
@@ -396,12 +396,13 @@ class AuctionServiceTest {
         assertEquals(OrderStatus.FILLED, filled.status());
         assertEquals(500, filled.filledQuantity());
         assertEquals(500, db.query(trades::findAll).size());
+        assertTrue(db.query(trades::findAll).stream().allMatch(t -> t.executionPrice() == 32L));
         assertEquals(500, db.query(c -> deliveries.listByState(c, DeliveryState.CLAIMABLE))
                 .stream().mapToInt(d -> d.item().quantity()).sum());
-        assertEquals(5_000L, economy.balances.entrySet().stream()
+        assertEquals(16_000L, economy.balances.entrySet().stream()
                 .filter(e -> !e.getKey().equals(buyer) && !e.getKey().equals(economy.treasury))
                 .mapToLong(Map.Entry::getValue).sum());
-        assertEquals(5_000L, economy.getBalance(buyer));
+        assertEquals(4_000L, economy.getBalance(buyer));
         assertTrue(economy.escrows.values().stream()
                 .allMatch(e -> e.state() == EconomyGateway.HoldingState.CAPTURED));
         assertFalse(db.query(new com.valorcraft.vauction.persistence.MatchWorkRepository()::hasAny));
