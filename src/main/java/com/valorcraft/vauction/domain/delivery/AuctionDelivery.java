@@ -91,6 +91,19 @@ public record AuctionDelivery(
                 null, null, claimToken, error, version);
     }
 
+    /**
+     * Вернуть обратно в CLAIMABLE после неудачной попытки выдачи
+     * (инвентарь был полон) — письмо остаётся доступным для повторного забора.
+     */
+    public AuctionDelivery reopenClaimable(long claimableAt, String error) {
+        if (state != DeliveryState.CLAIMING) {
+            throw new IllegalStateException("only CLAIMING can reopen to CLAIMABLE, got " + state);
+        }
+        return new AuctionDelivery(deliveryId, dedupeKey, playerUuid, listingId, operationId,
+                deliveryType, DeliveryState.CLAIMABLE, item, createdAt, claimableAt,
+                null, null, claimToken, error, version);
+    }
+
     public static Builder newDelivery(UUID playerUuid, long listingId, String operationId,
                                       DeliveryType type, ItemSnapshot item, long createdAt) {
         return new Builder(playerUuid, listingId, operationId, type, item, createdAt);

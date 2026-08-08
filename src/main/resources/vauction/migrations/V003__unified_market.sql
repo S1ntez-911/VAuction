@@ -98,10 +98,10 @@ CREATE TABLE auction_operation_log_new (
 );
 
 INSERT INTO auction_operation_log_new
-    (operation_id, listing_id, operation_type, status, actor_uuid, target_uuid,
+    (operation_id, listing_id, operation_type, phase, status, actor_uuid, target_uuid,
      idempotency_key, payload_json, attempt_count, last_error, next_retry_at,
      created_at, updated_at)
-SELECT operation_id, listing_id, operation_type, status, actor_uuid, target_uuid,
+SELECT operation_id, listing_id, operation_type, phase, status, actor_uuid, target_uuid,
        idempotency_key, payload_json, attempt_count, last_error, next_retry_at,
        created_at, updated_at
 FROM auction_operation_log;

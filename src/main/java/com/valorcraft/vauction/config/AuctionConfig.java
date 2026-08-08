@@ -90,8 +90,8 @@ public final class AuctionConfig {
                     .define("allow_containers_with_contents", false);
             blockCustomNbt = b
                     .comment("Запрещать предметы с нестандартным NBT (кроме повреждений).",
-                            "true = предметы с тегами на биржу/заявки не попадут.")
-                    .define("block_custom_nbt", true);
+                            "false = предметы с тегами торгуются: MarketKey разделяет стакан по полному NBT, контент не теряется.")
+                    .define("block_custom_nbt", false);
             allowEnchantedBooks = b
                     .comment("Разрешать книги зачарований даже при block_custom_nbt=true.")
                     .define("allow_enchanted_books", true);

@@ -90,6 +90,23 @@ class ItemStackCodecTest {
     }
 
     @Test
+    void exactMarketKeyIgnoresOnlyCount() throws ItemCodecException {
+        ExactItemMarketKeyStrategy strategy = new ExactItemMarketKeyStrategy(CODEC);
+        assertEquals(strategy.keyOf(new ItemStack(Items.DIAMOND, 1)),
+                strategy.keyOf(new ItemStack(Items.DIAMOND, 32)));
+    }
+
+    @Test
+    void exactMarketKeySeparatesMeaningfulNbt() throws ItemCodecException {
+        ExactItemMarketKeyStrategy strategy = new ExactItemMarketKeyStrategy(CODEC);
+        ItemStack first = new ItemStack(Items.DIAMOND, 1);
+        first.getOrCreateTag().putInt("Energy", 100);
+        ItemStack second = new ItemStack(Items.DIAMOND, 1);
+        second.getOrCreateTag().putInt("Energy", 200);
+        assertNotEquals(strategy.keyOf(first), strategy.keyOf(second));
+    }
+
+    @Test
     void unknownCodecVersionFails() throws ItemCodecException {
         ItemSnapshot snapshot = CODEC.encode(new ItemStack(Items.DIAMOND));
         ItemSnapshot foreign = new ItemSnapshot(snapshot.serializedData(), "foreign_codec_v9",

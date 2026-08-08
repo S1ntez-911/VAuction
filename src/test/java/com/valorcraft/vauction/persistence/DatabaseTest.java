@@ -9,6 +9,9 @@ import com.valorcraft.vauction.domain.operation.AuctionOperation;
 import com.valorcraft.vauction.domain.operation.OperationPhase;
 import com.valorcraft.vauction.domain.operation.OperationStatus;
 import com.valorcraft.vauction.domain.operation.OperationType;
+import com.valorcraft.vauction.domain.order.Order;
+import com.valorcraft.vauction.domain.order.OrderSide;
+import com.valorcraft.vauction.domain.order.OrderStatus;
 import com.valorcraft.vauction.domain.sale.AuctionSale;
 import com.valorcraft.vauction.item.ItemSnapshot;
 import org.junit.jupiter.api.AfterEach;
@@ -19,6 +22,7 @@ import java.sql.Connection;
 import java.sql.PreparedStatement;
 import java.sql.ResultSet;
 import java.sql.SQLException;
+import java.sql.Statement;
 import java.util.LinkedHashSet;
 import java.util.Optional;
 import java.util.Set;
@@ -26,6 +30,7 @@ import java.util.UUID;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
@@ -77,6 +82,119 @@ class DatabaseTest {
         db.initialize();
         db.initialize();
         assertTrue(db.schemaVersion() >= 1);
+    }
+
+    @Test
+    void populatedPreV003DatabaseMigratesAndKeepsOperationPhase() {
+        SqliteJdbcSource source = new SqliteJdbcSource("jdbc:sqlite::memory:");
+        source.open();
+        try {
+            source.inTransaction(c -> {
+                applyResource(c, "vauction/migrations/V001__initial_schema.sql");
+                applyResource(c, "vauction/migrations/V002__buy_orders.sql");
+                try (Statement st = c.createStatement()) {
+                    st.execute("CREATE TABLE schema_version (version INTEGER PRIMARY KEY, "
+                            + "description VARCHAR(255) NOT NULL, checksum VARCHAR(64) NOT NULL, "
+                            + "applied_at BIGINT NOT NULL)");
+                    st.execute("INSERT INTO schema_version VALUES (1,'initial','legacy',1)");
+                    st.execute("INSERT INTO schema_version VALUES (2,'buy','legacy',2)");
+                    st.execute("INSERT INTO auction_operation_log "
+                            + "(operation_id, operation_type, phase, status, idempotency_key, "
+                            + "attempt_count, created_at, updated_at) VALUES "
+                            + "('legacy-op','CREATE_LISTING','ITEM_LOCK','RUNNING','legacy-key',0,1,1)");
+                }
+                return null;
+            });
+
+            MigrationRunner.Result result = source.query(MigrationRunner::run);
+            assertEquals(3, result.schemaVersion());
+            String phase = source.query(c -> {
+                try (Statement st = c.createStatement();
+                     ResultSet rs = st.executeQuery(
+                             "SELECT phase FROM auction_operation_log WHERE operation_id='legacy-op'")) {
+                    assertTrue(rs.next());
+                    return rs.getString(1);
+                }
+            });
+            assertEquals("ITEM_LOCK", phase);
+        } finally {
+            source.close();
+        }
+    }
+
+    /* ------------------------------ unified order book ------------------------------ */
+
+    @Test
+    void orderInsertRoundTripKeepsPriceAndAllQuantities() {
+        OrderRepository repo = new OrderRepository();
+        UUID owner = UUID.randomUUID();
+        UUID id = UUID.randomUUID();
+        Order order = Order.newOrder(owner, OrderSide.BUY, "exact:key",
+                        item("minecraft:copper_ingot"), 37L, 500, 100L)
+                .orderId(id).filledQuantity(125).refEpoch(4)
+                .escrowReference("vauction:buy:" + id + ":4").build();
+
+        db.inTransaction(c -> {
+            repo.insert(c, order);
+            return null;
+        });
+        Order read = db.query(c -> repo.findById(c, id)).orElseThrow();
+
+        assertEquals(37L, read.pricePerUnit());
+        assertEquals(500, read.originalQuantity());
+        assertEquals(375, read.remainingQuantity());
+        assertEquals(125, read.filledQuantity());
+        assertEquals(4, read.refEpoch());
+        assertEquals(order.escrowReference(), read.escrowReference());
+        assertEquals(OrderStatus.ACTIVE, read.status());
+    }
+
+    @Test
+    void orderBookUsesPriceThenFifoOnBothSides() {
+        OrderRepository repo = new OrderRepository();
+        Order sellOld = order(OrderSide.SELL, 30, 10, 100);
+        Order sellCheap = order(OrderSide.SELL, 20, 10, 300);
+        Order sellNew = order(OrderSide.SELL, 30, 10, 200);
+        Order buyOld = order(OrderSide.BUY, 40, 10, 100);
+        Order buyHigh = order(OrderSide.BUY, 50, 10, 300);
+        Order buyNew = order(OrderSide.BUY, 40, 10, 200);
+        db.inTransaction(c -> {
+            for (Order o : new Order[] {sellOld, sellCheap, sellNew, buyOld, buyHigh, buyNew}) {
+                repo.insert(c, o);
+            }
+            return null;
+        });
+
+        assertEquals(java.util.List.of(sellCheap.orderId(), sellOld.orderId(), sellNew.orderId()),
+                db.query(c -> repo.bestSells(c, "exact:key", 99, 10)).stream()
+                        .map(Order::orderId).toList());
+        assertEquals(java.util.List.of(buyHigh.orderId(), buyOld.orderId(), buyNew.orderId()),
+                db.query(c -> repo.bestBuys(c, "exact:key", 1, 10)).stream()
+                        .map(Order::orderId).toList());
+    }
+
+    @Test
+    void orderConsumptionIsCasProtectedAndPreservesInvariant() {
+        OrderRepository repo = new OrderRepository();
+        Order original = order(OrderSide.SELL, 32, 100, 100);
+        db.inTransaction(c -> {
+            repo.insert(c, original);
+            return null;
+        });
+
+        assertEquals(Integer.valueOf(50),
+                db.inTransaction(c -> repo.tryConsume(c, original, 50, 200)));
+        assertNull(db.inTransaction(c -> repo.tryConsume(c, original, 50, 201)),
+                "stale version must not consume the same remainder twice");
+        Order half = db.query(c -> repo.findById(c, original.orderId())).orElseThrow();
+        assertEquals(50, half.remainingQuantity());
+        assertEquals(50, half.filledQuantity());
+        assertEquals(100, half.remainingQuantity() + half.filledQuantity());
+        assertEquals(Integer.valueOf(0),
+                db.inTransaction(c -> repo.tryConsume(c, half, 50, 202)));
+        Order filled = db.query(c -> repo.findById(c, original.orderId())).orElseThrow();
+        assertEquals(OrderStatus.FILLED, filled.status());
+        assertEquals(100, filled.filledQuantity());
     }
 
     /* ------------------------------ listings + CAS ------------------------------ */
@@ -289,5 +407,25 @@ class DatabaseTest {
             }
         }
         return tables;
+    }
+
+    private static Order order(OrderSide side, long price, int quantity, long createdAt) {
+        return Order.newOrder(UUID.randomUUID(), side, "exact:key",
+                item("minecraft:copper_ingot"), price, quantity, createdAt).build();
+    }
+
+    private static void applyResource(Connection c, String path) throws Exception {
+        String sql;
+        try (var in = DatabaseTest.class.getClassLoader().getResourceAsStream(path)) {
+            if (in == null) {
+                throw new IllegalStateException("missing resource " + path);
+            }
+            sql = new String(in.readAllBytes(), java.nio.charset.StandardCharsets.UTF_8);
+        }
+        for (String statement : MigrationRunner.splitStatements(sql)) {
+            try (Statement st = c.createStatement()) {
+                st.execute(statement);
+            }
+        }
     }
 }

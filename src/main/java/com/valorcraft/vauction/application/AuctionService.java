@@ -38,23 +38,28 @@ import java.util.Optional;
 import java.util.UUID;
 
 /**
- * Бизнес-логика ЕДИНОГО order-book рынка VAuction (замена старого «listings +
- * buy orders» и мёртвого exchange-скелета).
+ * Бизнес-логика ЕДИНОГО order-book рынка VAuction.
  * <p>
- * Модель: {@code auction_orders} (BUY/SELL) + {@code auction_trades} (fill'ы) +
- * {@code auction_deliveries} (выдача предметов). Матчинг price-time:
+ * Модель денег: **BUY-заявка полностью обеспечена escrow при создании**
+ * (резервируется {@code quantity * limitPrice}; ссылка {@code vauction:buy:<id>:<эпоха>}).
+ * Каждый fill — «settle старой эпохи → при необходимости новый резерв остатка
+ * (следующая эпоха)»; остаток никогда не торгуется без покрытия, ссылки
+ * никогда не переиспользуются. SELL-заявка удерживает предметы в БД.
+ * <p>
+ * Шаги одного fill (все повторимы, идемпотентны через {@code tradeId} и ref):
  * <ul>
- *   <li>maker price = цена resting-ордера (сторона, стоявшая в книге);</li>
- *   <li>partial fills: каждый чанк — отдельный Trade с ДЕТЕРМИНИРОВАННЫМ uuid и
- *       собственной escrow-сагой; повтор попытки идемпотентен;</li>
- *   <li>self-trade пропускается; комиссия (bps, floor) — казне VEconomy;</li>
- *   <li>SELL-ордера удерживают предметы виртуально (остаток в БД); отмена/срок
- *       возвращают остаток delivery-письмом.</li>
+ *   <li>S2 intent: trade(PENDING) + журнал + CAS-потребление обеих сторон
+ *       (при любом сбое БД — откат целиком, КОМПЕНСАЦИЯ НЕ ТРЕБУЕТСЯ);</li>
+ *   <li>S3 settle старой эпохи: продавец(net) + казна(комиссия) + покупатель(refund);</li>
+ *   <li>S4 relock новой эпохи (если остаток) и финальная фиксация:
+ *       trade→SETTLED, delivery→CLAIMABLE, {@code escrowReference/refEpoch} ордера.</li>
  * </ul>
- * ВСЕ операции — с серверного потока; деньги — только через {@link EconomyGateway}.
- * Crash-границы S1..S4 восстановимы в {@code RecoveryService}: escrow-резерв без
- * Trade → release; Trade PENDING + escrow CAPTURED → SETTLED; Trade PENDING +
- * escrow RESERVED → провести settle (данных Trade достаточно).
+ * Каждый пункт можно безопасно повторить после краха ({@link RecoveryService}).
+ * <p>
+ * Полная модель: все операции — с серверного потока; оптимистичные блокировки
+ * (CAS по version) спасают от двойного fill; partial fills несколькими
+ * продавцами перечитывают buy-ордер после каждого chunk (проблема устаревшей
+ * version и повторной эпохи исключена).
  */
 public final class AuctionService {
 
@@ -63,8 +68,9 @@ public final class AuctionService {
     private static final String REF_BUY = "vauction:buy:";
     private static final String ROLE_SELLER = "seller";
     private static final String ROLE_COMMISSION = "commission";
-    private static final String PREFIX_TRADE_DELIVERY = "trade:";
-    private static final String PREFIX_CANCEL_DELIVERY = "cancel:";
+    private static final String ROLE_BUYER_REFUND = "buyer-refund";
+    /** Верхний предел одного delivery; фактический предел учитывает max stack size предмета. */
+    private static final int MAX_DELIVERY_CHUNK = 64;
     private static final int BOOK_QUERY_LIMIT = 200;
     private static final long MILLIS_PER_DAY = 86_400_000L;
 
@@ -136,19 +142,30 @@ public final class AuctionService {
         return placeSell(sellerId, item, pricePerUnit, quantity);
     }
 
-    /** Выставить на продажу из слота инвентаря игрока (физическое списание). */
+    /** Выставить на продажу из слота инвентаря (сбор одинаковых стеков из нескольких слотов). */
     public Outcome createSellOrderFromSlot(ServerPlayer seller, int slotIndex, long pricePerUnit, int quantity) {
         if (seller == null) {
             return Outcome.fail(Result.NOT_A_PLAYER, "Только для игроков");
         }
-        if (slotIndex < 0) {
+        if (slotIndex < 0 || slotIndex >= seller.getInventory().getContainerSize()) {
             return Outcome.fail(Result.INVALID_QUANTITY, "Некорректный слот");
         }
         ItemStack stack = seller.getInventory().getItem(slotIndex);
-        if (stack.isEmpty() || stack.getCount() < quantity) {
-            return Outcome.fail(Result.INSUFFICIENT_ITEMS, "В слоте недостаточно предметов");
+        if (stack.isEmpty()) {
+            return Outcome.fail(Result.INSUFFICIENT_ITEMS, "Пустой слот");
         }
-        if (!inventory.tryTake(seller.getUUID(), stack, quantity)) {
+        if (quantity <= 0) {
+            return Outcome.fail(Result.INVALID_QUANTITY, "Количество должно быть положительным");
+        }
+        // #11: пред-роверка по ВСЕМУ инвентарю (не только выбранный слот)
+        ItemStack probe = stack.copy();
+        probe.setCount(1);
+        int available = inventory.availableCount(seller.getUUID(), probe);
+        if (quantity > available) {
+            return Outcome.fail(Result.INSUFFICIENT_ITEMS,
+                    "Недостаточно предметов в инвентаре (доступно " + available + ")");
+        }
+        if (!inventory.tryTake(seller.getUUID(), probe, quantity)) {
             return Outcome.fail(Result.INSUFFICIENT_ITEMS, "Не удалось списать предметы");
         }
         ItemStack sellUnit = stack.copy();
@@ -202,13 +219,13 @@ public final class AuctionService {
         } catch (ItemCodecException e) {
             return Outcome.fail(Result.BLACKLISTED, "Предмет не удалось закодировать");
         }
-        return placeBuy(buyerId, unit, unitSnapshot, pricePerUnit, quantity);
+        return placeBuy(buyerId, unit, unitSnapshot, pricePerUnit, quantity, total);
     }
 
     // ================================================================ размещение
 
     private Outcome placeBuy(UUID buyerId, ItemStack unit, ItemSnapshot unitSnapshot,
-                             long pricePerUnit, int quantity) {
+                             long pricePerUnit, int quantity, long total) {
         String key = marketKeyOf(unit);
         if (key == null) {
             return Outcome.fail(Result.BLACKLISTED, "Предмет не допустим на рынке");
@@ -219,15 +236,21 @@ public final class AuctionService {
         }
         long now = now();
         UUID orderId = UUID.randomUUID();
+        String ref0 = refFor(orderId, 0);
         Order order;
         try {
             Order created = Order.newOrder(buyerId, OrderSide.BUY, key, unitSnapshot,
-                    pricePerUnit, quantity, now).orderId(orderId).build();
+                            pricePerUnit, quantity, now)
+                    .orderId(orderId)
+                    .refEpoch(0)
+                    .escrowReference(ref0)
+                    .build();
             order = created;
             database.inTransaction(conn -> {
                 orders.insert(conn, created);
                 operations.insert(conn, operationEntry(OperationType.CREATE_BUY_ORDER,
-                                "op:create-buy:" + orderId, orderId, buyerId, OperationPhase.BEGIN, now)
+                                "op:create-buy:" + orderId, orderId, buyerId,
+                                OperationPhase.ESCROW_RESERVE, now)
                         .operationId("create-buy-" + orderId).build());
                 return null;
             });
@@ -235,32 +258,51 @@ public final class AuctionService {
             return Outcome.fail(Result.DATABASE_FAILED, e.getMessage());
         }
 
+        // Durable intent уже содержит deterministic ref: crash до/после reserve
+        // восстанавливается сканированием активных BUY, orphan escrow не возникает.
+        EconomyGateway.ReserveResult r0 = economy.reserve(buyerId, total, ref0,
+                "buy hold " + orderId, "va:buy:" + orderId);
+        if (!r0.isSuccessOrIdempotent()) {
+            LOGGER.warn("reserve on buy creation failed {}: {}", ref0, r0.status());
+            markCreateBuyFailed(orderId, r0.status().name());
+            if (r0.status() == EconomyGateway.ReserveStatus.INSUFFICIENT_FUNDS) {
+                return Outcome.fail(Result.INSUFFICIENT_FUNDS, "Недостаточно средств");
+            }
+            return Outcome.fail(Result.ECONOMY_FAILED, "Не удалось зарезервировать средства");
+        }
+
         List<Order> resting = database.query(conn ->
                 orders.bestSells(conn, key, pricePerUnit, BOOK_QUERY_LIMIT));
         List<Trade> fills = new ArrayList<>();
         int need = quantity;
-        int seq = 0;
+        Order cur = order;
         for (Order sellOrder : resting) {
-            if (need <= 0) {
+            if (need <= 0 || cur == null || !cur.isActive()) {
                 break;
             }
             if (sellOrder.ownerUuid().equals(buyerId) && !settings.allowSelfPurchase()) {
                 continue;
             }
             int chunk = Math.min(need, sellOrder.remainingQuantity());
-            Trade fill = executeFill(buyerId, sellOrder.ownerUuid(), order, sellOrder, chunk,
-                    sellOrder.pricePerUnit(), OrderSide.SELL, seq, now);
+            if (chunk <= 0) {
+                continue;
+            }
+            Trade fill = executeFill(cur, sellOrder, chunk, sellOrder.pricePerUnit(),
+                    OrderSide.SELL, now);
             if (fill == null) {
                 break;
             }
             fills.add(fill);
             need -= chunk;
-            seq++;
+            // #3: свежий объект buy-ордера — версия и эпоха escrow устаревают
+            UUID curOrderId = cur.orderId();
+            cur = database.query(c -> orders.findById(c, curOrderId).orElse(null));
         }
         completeOp("create-buy-" + orderId);
+        Order finalOrder = cur == null ? order : cur;
         return new Outcome(Result.SUCCESS,
                 fills.isEmpty() ? "Заявка размещена: " + orderId : "Заявка исполнена: " + orderId,
-                order, fills);
+                finalOrder, fills);
     }
 
     private Outcome placeSell(UUID sellerId, ItemStack unit, long pricePerUnit, int quantity) {
@@ -295,13 +337,14 @@ public final class AuctionService {
         Order order;
         try {
             Order created = Order.newOrder(sellerId, OrderSide.SELL, key, unitSnapshot,
-                    pricePerUnit, quantity, now).orderId(orderId).build();
+                            pricePerUnit, quantity, now)
+                    .orderId(orderId).build();
             order = created;
             database.inTransaction(conn -> {
                 orders.insert(conn, created);
                 operations.insert(conn, operationEntry(OperationType.CREATE_SELL_ORDER,
                                 "op:create-sell:" + orderId, orderId, sellerId,
-                                OperationPhase.BEGIN, now)
+                                OperationPhase.COMPLETE, now)
                         .operationId("create-sell-" + orderId).build());
                 return null;
             });
@@ -313,140 +356,212 @@ public final class AuctionService {
                 orders.bestBuys(conn, key, pricePerUnit, BOOK_QUERY_LIMIT));
         List<Trade> fills = new ArrayList<>();
         int need = quantity;
-        int seq = 0;
+        Order cur = order;
         for (Order buyOrder : resting) {
-            if (need <= 0) {
+            if (need <= 0 || cur == null || !cur.isActive()) {
                 break;
             }
             if (buyOrder.ownerUuid().equals(sellerId) && !settings.allowSelfPurchase()) {
                 continue;
             }
             int chunk = Math.min(need, buyOrder.remainingQuantity());
-            Trade fill = executeFill(buyOrder.ownerUuid(), sellerId, buyOrder, order, chunk,
-                    buyOrder.pricePerUnit(), OrderSide.BUY, seq, now);
+            if (chunk <= 0) {
+                continue;
+            }
+            Trade fill = executeFill(buyOrder, cur, chunk, buyOrder.pricePerUnit(),
+                    OrderSide.BUY, now);
             if (fill == null) {
                 break;
             }
             fills.add(fill);
             need -= chunk;
-            seq++;
+            // #3 свежий объект основной стороны (taker)
+            UUID curOrderId = cur.orderId();
+            cur = database.query(c -> orders.findById(c, curOrderId).orElse(null));
         }
         completeOp("create-sell-" + orderId);
-        return new Outcome(Result.SUCCESS, "Ордер размещён: " + orderId, order, fills);
+        Order finalOrder = cur != null ? cur : order;
+        return new Outcome(Result.SUCCESS, "Ордер размещён: " + orderId, finalOrder, fills);
     }
 
     // ================================================================ fill-сага
 
     /**
-     * Один чанк исполнения. S1 reserve → S2 intent(БД) → S3 settle →
-     * S4 фиксация. Возвращает Trade или {@code null} при сбое.
+     * Один chunk. S2 (intent, tx) → S3 (settlement) → S4 (relock + finalize).
+     * Возвращает Trade или {@code null} при сбое одного из шагов
+     * (повтор этого же fill — идемпотентен через tradeId и escrow-ref).
      */
-    private Trade executeFill(UUID buyerId, UUID sellerId, Order buyOrder, Order sellOrder,
-                              int chunk, long makerPrice, OrderSide makerSide, int seq, long now) {
-        long gross = Math.multiplyExact(makerPrice, chunk);
-        long commission = (gross * (long) settings.commissionBps()) / 10_000L;
-        long sellerNet = gross - commission;
-        String ref = REF_BUY + buyOrder.orderId() + ":" + seq;
-        UUID tradeId = deterministicTradeId(buyOrder.orderId(), sellOrder.orderId(), seq);
-
-        EconomyGateway.ReserveResult reserve = economy.reserve(buyerId, gross, ref,
-                "fill escrow " + tradeId, "va:reserve:" + tradeId);
-        if (!reserve.isSuccessOrIdempotent()) {
-            LOGGER.warn("S1 reserve failed ref={} status={}", ref, reserve.status());
-            if (reserve.status() == EconomyGateway.ReserveStatus.INSUFFICIENT_FUNDS) {
-                markManualReview(buyOrder, tradeId, "недостаточно средств на fill");
-            }
+    private Trade executeFill(Order buyOrder, Order sellOrder, int chunk,
+                              long makerPrice, OrderSide makerSide, long now) {
+        if (buyOrder.escrowReference() == null || buyOrder.escrowReference().isBlank()) {
+            LOGGER.error("fill {}: buy order без escrow reference", buyOrder.orderId());
             return null;
         }
-
+        String ref = buyOrder.escrowReference();
+        long commission = commissionOf(makerPrice, chunk);
+        UUID tradeId = deterministicTradeId(buyOrder.orderId(), sellOrder.orderId(),
+                buyOrder.refEpoch());
         Trade pending = Trade.newTrade(buyOrder.marketKey(), buyOrder.orderId(), sellOrder.orderId(),
-                        makerSide, makerPrice, chunk, commission, buyerId, sellerId, ref, now)
+                        makerSide, makerPrice, chunk, commission, buyOrder.ownerUuid(),
+                        sellOrder.ownerUuid(), ref, now)
                 .tradeId(tradeId).build();
+
+        // S2: intent одним tx; любой сбой откатывает ВСЁ — компенсация не нужна (#3)
         try {
             database.inTransaction(conn -> {
-                recordIntent(conn, pending, buyOrder, sellOrder, chunk, now);
+                if (trades.findById(conn, tradeId).isPresent()) {
+                    return null; // повтор (recovery) — сага не задублируется
+                }
+                trades.insert(conn, pending);
+                operations.insert(conn, operationEntry(OperationType.EXECUTE_FILL,
+                                "op:fill:" + tradeId, buyOrder.orderId(), sellOrder.ownerUuid(),
+                                OperationPhase.ESCROW_SETTLE, now)
+                        .operationId("fill-" + tradeId).build());
+                if (orders.tryConsume(conn, sellOrder, chunk, now) == null) {
+                    throw new DatabaseException("sell consume conflict " + sellOrder.orderId());
+                }
+                if (orders.tryConsume(conn, buyOrder, chunk, now) == null) {
+                    throw new DatabaseException("buy consume conflict " + buyOrder.orderId());
+                }
                 return null;
             });
         } catch (RuntimeException e) {
             LOGGER.warn("S2 intent failed {}: {}", tradeId, e.getMessage());
-            releaseWithCompensation(pending, buyOrder, sellOrder, chunk, ref);
             return null;
         }
+        int remainingAfter = buyOrder.remainingQuantity() - chunk;
+        if (!settleAfterIntent(pending, buyOrder, sellOrder, chunk, remainingAfter, now)) {
+            return null;
+        }
+        return database.query(c -> trades.findById(c, tradeId).orElse(pending));
+    }
 
-        EconomyGateway.SettleResult settled = economy.settle(ref,
-                List.of(new EconomyGateway.Credit(sellerId, sellerNet, ROLE_SELLER),
-                        new EconomyGateway.Credit(economy.treasury(), commission, ROLE_COMMISSION)),
-                "settle fill " + tradeId, "va:settle:" + tradeId);
+    /**
+     * Публичный idempotent «допроведение» fill после краха в фазах S3/S4.
+     * Используется {@link RecoveryService}; параметры полностью выводятся из
+     * данных Trade и свежего ордера.
+     */
+    public boolean resumeFill(Trade trade) {
+        if (trade.state() != TradeState.PENDING) {
+            return true;
+        }
+        Order buy = database.query(c -> orders.findById(c, trade.buyOrderId()).orElse(null));
+        if (buy == null) {
+            LOGGER.error("resumeFill {}: buy order не найден", trade.tradeId());
+            return false;
+        }
+        Order sellOrder = database.query(c -> orders.findById(c, trade.sellOrderId()).orElse(null));
+        if (sellOrder == null) {
+            LOGGER.error("resumeFill {}: sell order не найден", trade.tradeId());
+            return false;
+        }
+        int remainingAfter = Math.max(0, buy.remainingQuantity()); // consumption уже применено
+        return settleAfterIntent(trade, buy, sellOrder, trade.quantity(), remainingAfter, now());
+    }
+
+    /**
+     * S3 + S4. Только деньги и финальная фиксация; идемпотентность —
+     * через escrow-ref и CAS по trade/delivery/order. {@code remainingAfter} —
+     * остаток buy-ордера ПОСЛЕ применения этого fill.
+     */
+    private boolean settleAfterIntent(Trade trade, Order buyOrder, Order sellOrder, int chunk,
+                                      int remainingAfter, long now) {
+        String ref = trade.escrowReference();
+        if (ref == null || ref.isBlank()) {
+            LOGGER.error("settle after intent: trade {} без ref", trade.tradeId());
+            return false;
+        }
+        long gross = trade.grossMinor();
+        long commission = trade.commissionMinor();
+        long sellerNet = gross - commission;
+        long locked;
+        try {
+            // remainingAfter одинаково трактуется и сразу после intent, и при recovery.
+            locked = Math.multiplyExact((long) remainingAfter + chunk,
+                    buyOrder.pricePerUnit());
+        } catch (ArithmeticException e) {
+            LOGGER.error("escrow amount overflow: {}", trade.tradeId());
+            markManualReview(buyOrder, trade.tradeId(), "overflow escrow");
+            return false;
+        }
+        long refund = locked - gross;
+        if (refund < 0) {
+            LOGGER.error("refund<0 для {} (locked={}, gross={})", trade.tradeId(), locked, gross);
+            markManualReview(buyOrder, trade.tradeId(), "refund<0");
+            return false;
+        }
+
+        // S3: settlement; нулевые доли не отправляются (#9)
+        List<EconomyGateway.Credit> credits = new ArrayList<>(3);
+        if (sellerNet > 0) {
+            credits.add(new EconomyGateway.Credit(sellOrder == null ? trade.sellerUuid() : sellOrder.ownerUuid(),
+                    sellerNet, ROLE_SELLER));
+        }
+        if (commission > 0) {
+            credits.add(new EconomyGateway.Credit(economy.treasury(), commission, ROLE_COMMISSION));
+        }
+        if (refund > 0) {
+            credits.add(new EconomyGateway.Credit(trade.buyerUuid(), refund, ROLE_BUYER_REFUND));
+        }
+        EconomyGateway.SettleResult settled = economy.settle(ref, credits,
+                "settle " + trade.tradeId(), "va:settle:" + trade.tradeId());
         if (!settled.isSuccessOrIdempotent()) {
-            releaseWithCompensation(pending, buyOrder, sellOrder, chunk, ref);
-            return null;
+            LOGGER.warn("S3 settle failed {}: {}", trade.tradeId(), settled.status());
+            markManualReview(buyOrder, trade.tradeId(), "settle " + settled.status());
+            return false;
         }
 
+        // S4a: новая эпоха резерва (только если остался невыполненный остаток)
+        boolean advance = remainingAfter > 0;
+        int nextEpoch = buyOrder.refEpoch() + 1;
+        String nextRef;
+        if (advance) {
+            long nextLocked;
+            try {
+                nextLocked = Math.multiplyExact((long) remainingAfter, buyOrder.pricePerUnit());
+            } catch (ArithmeticException e) {
+                markManualReview(buyOrder, trade.tradeId(), "overflow next escrow");
+                return false;
+            }
+            nextRef = refFor(buyOrder.orderId(), nextEpoch);
+            EconomyGateway.ReserveResult relock = economy.reserve(trade.buyerUuid(), nextLocked,
+                    nextRef, "buy hold " + buyOrder.orderId() + " e" + nextEpoch,
+                    "va:relock:" + trade.tradeId());
+            if (!relock.isSuccessOrIdempotent()) {
+                LOGGER.warn("S4 relock failed {}: {}", trade.tradeId(), relock.status());
+                // Текущий fill уже оплачен атомарным settlement. Его нужно завершить и
+                // выдать покупателю; небезопасен только НЕИСПОЛНЕННЫЙ остаток BUY.
+                markManualReview(buyOrder, trade.tradeId(), "relock " + relock.status());
+                advance = false;
+                nextRef = null;
+            }
+        } else {
+            nextRef = null;
+        }
+
+        // S4b: финальная фиксация (транзакция; повторимая)
+        boolean shouldAdvance = advance;
+        String committedRef = nextRef;
         try {
             database.inTransaction(conn -> {
-                trades.markSettled(conn, pending, now());
-                completeOp(conn, "fill-" + tradeId);
+                Order pendingOrder = orders.findById(conn, buyOrder.orderId()).orElse(buyOrder);
+                if (shouldAdvance && pendingOrder.isActive()) {
+                    orders.applyState(conn, pendingOrder,
+                            pendingOrder.withRefEpoch(nextEpoch, committedRef, now));
+                }
+                Trade current = trades.findById(conn, trade.tradeId()).orElse(trade);
+                trades.markSettled(conn, current, now);
+                insertClaimableDeliveries(conn, trade.buyerUuid(), "fill-" + trade.tradeId(),
+                        DeliveryType.PURCHASED, sellOrder == null ? buyOrder.item() : sellOrder.item(),
+                        chunk, now);
+                completeOp(conn, "fill-" + trade.tradeId());
                 return null;
             });
         } catch (RuntimeException e) {
-            LOGGER.warn("S4 finalize failed (восстановимо recovery'ем): {}", e.getMessage());
+            LOGGER.warn("S4 фиксация failed (восстановимо recovery'ем): {}", e.getMessage());
+            return false;
         }
-        return pending;
-    }
-
-    /** S2-интенты (trade + delivery + consumption) одним tx; повтор безопасен. */
-    private void recordIntent(Connection conn, Trade pending, Order buyOrder, Order sellOrder,
-                              int chunk, long now) {
-        if (trades.findById(conn, pending.tradeId()).isPresent()) {
-            return;
-        }
-        trades.insert(conn, pending);
-        deliveries.insert(conn, AuctionDelivery.newDelivery(
-                        pending.buyerUuid(), 0L, "fill-" + pending.tradeId(),
-                        DeliveryType.PURCHASED, withQuantity(sellOrder.item(), chunk), now)
-                .dedupeKey(PREFIX_TRADE_DELIVERY + pending.tradeId())
-                .build());
-        operations.insert(conn, operationEntry(OperationType.EXECUTE_FILL,
-                        "op:fill:" + pending.tradeId(), pending.buyOrderId(), pending.sellerUuid(),
-                        OperationPhase.ESCROW_SETTLE, now)
-                .operationId("fill-" + pending.tradeId()).build());
-        if (orders.tryConsume(conn, sellOrder, chunk, now) == null) {
-            throw new DatabaseException("sell consume conflict " + sellOrder.orderId());
-        }
-        if (orders.tryConsume(conn, buyOrder, chunk, now) == null) {
-            throw new DatabaseException("buy consume conflict " + buyOrder.orderId());
-        }
-    }
-
-    /** Откат при провале S3: деньги возвращаются release, письмо и потребления — компенсируются. */
-    private void releaseWithCompensation(Trade pending, Order buyOrder, Order sellOrder, int chunk, String ref) {
-        economy.release(ref, "compensate fill " + pending.tradeId(), "va:release:" + pending.tradeId());
-        int c = chunk;
-        long now = now();
-        try {
-            database.inTransaction(conn -> {
-                trades.findById(conn, pending.tradeId())
-                        .filter(t -> t.state() == TradeState.PENDING)
-                        .ifPresent(t -> trades.markFailed(conn, t));
-                deliveries.findByDedupeKey(conn, PREFIX_TRADE_DELIVERY + pending.tradeId())
-                        .ifPresent(d -> deliveries.applyState(conn, d, d.toFailed("settle failed")));
-                restoreConsumption(conn, buyOrder, sellOrder, c, now);
-                return null;
-            });
-        } catch (RuntimeException e) {
-            LOGGER.error("compensation failed {}: {}", pending.tradeId(), e.getMessage());
-        }
-    }
-
-    private void restoreConsumption(Connection conn, Order buyOrder, Order sellOrder, int chunk, long now) {
-        Order buyNow = orders.findById(conn, buyOrder.orderId()).orElse(null);
-        if (buyNow != null && buyNow.filledQuantity() > 0) {
-            orders.applyState(conn, buyNow, buyNow.restore(chunk, now));
-        }
-        Order sellNow = orders.findById(conn, sellOrder.orderId()).orElse(null);
-        if (sellNow != null && sellNow.filledQuantity() > 0) {
-            orders.applyState(conn, sellNow, sellNow.restore(chunk, now));
-        }
+        return true;
     }
 
     // ================================================================ отмена
@@ -471,15 +586,22 @@ public final class AuctionService {
                     return Outcome.fail(Result.DATABASE_FAILED, "Конфликт при отмене");
                 }
                 operations.insert(conn, operationEntry(OperationType.CANCEL_ORDER,
-                                "op:cancel:" + orderId, orderId, actorId, OperationPhase.COMPLETE, now)
+                                reason == null ? "op:cancel:" + orderId : "op:cancel:" + orderId,
+                                orderId, actorId, OperationPhase.COMPLETE, now)
                         .operationId("cancel-order-" + orderId).build());
                 if (order.side() == OrderSide.SELL && order.remainingQuantity() > 0) {
-                    deliveries.insert(conn, AuctionDelivery.newDelivery(
-                                    actorId, 0L, "cancel-order-" + orderId,
-                                    DeliveryType.CANCELLED_RETURN,
-                                    withQuantity(order.item(), order.remainingQuantity()), now)
-                            .dedupeKey(PREFIX_CANCEL_DELIVERY + orderId)
-                            .build());
+                    insertClaimableDeliveries(conn, actorId, "cancel-order-" + orderId,
+                            DeliveryType.CANCELLED_RETURN, order.item(), order.remainingQuantity(), now);
+                }
+                if (order.side() == OrderSide.BUY
+                        && order.escrowReference() != null
+                        && !order.escrowReference().isBlank()) {
+                    EconomyGateway.ReleaseResult rel = economy.release(order.escrowReference(),
+                            "cancel buy " + orderId, "va:cancel:" + orderId);
+                    if (!rel.isSuccessOrIdempotent()) {
+                        throw new DatabaseException("release при cancel " + orderId
+                                + " завершился " + rel.status());
+                    }
                 }
                 completeOp(conn, "cancel-order-" + orderId);
                 return Outcome.ok("Ордер отменён", cancelled, List.of());
@@ -491,6 +613,11 @@ public final class AuctionService {
 
     // ================================================================ claim
 
+    /**
+     * Выдача письма. Разрешена ТОЛЬКО из CLAIMABLE (#7: delivery создаётся
+     * только после settlement) — предмет невозможно получить раньше выплат.
+     * Промежуточные CAS всегда идут от свежих объектов БД (#8).
+     */
     public Outcome claimDelivery(UUID actorId, long deliveryId) {
         long now = now();
         AuctionDelivery found = database.query(c -> deliveries.findById(c, deliveryId).orElse(null));
@@ -500,37 +627,43 @@ public final class AuctionService {
         if (!found.playerUuid().equals(actorId)) {
             return Outcome.fail(Result.NOT_YOUR_ORDER, "Чужое письмо");
         }
-        if (found.state() != DeliveryState.PENDING && found.state() != DeliveryState.CLAIMABLE) {
+        if (found.state() != DeliveryState.CLAIMABLE) {
+            if (found.state() == DeliveryState.PENDING) {
+                return Outcome.fail(Result.ORDER_NOT_FOUND, "Письмо ещё не готово к выдаче");
+            }
             return Outcome.fail(Result.ORDER_NOT_FOUND, "Письмо уже выдано");
         }
-        AuctionDelivery ready = found.state() == DeliveryState.PENDING
-                ? found.toClaimable(now, "claim-" + deliveryId)
-                : found;
-        AuctionDelivery claiming = ready.toClaiming(now);
+        AuctionDelivery claiming = found.toClaiming(now);
         boolean locked = database.inTransaction(c -> deliveries.applyState(c, found, claiming));
         if (!locked) {
             return Outcome.fail(Result.DATABASE_FAILED, "Письмо уже забирается другим вызовом");
         }
+        // свежая версия после CAS — следующий переход должен видеть version+1 (#8)
+        AuctionDelivery held = database.query(c -> deliveries.findById(c, deliveryId)
+                .orElse(claiming));
+        if (held.state() != DeliveryState.CLAIMING) {
+            return Outcome.fail(Result.DATABASE_FAILED, "Письмо сменило состояние");
+        }
         ItemStack stack;
         try {
-            stack = codec.decode(ready.item());
+            stack = codec.decode(held.item());
         } catch (ItemCodecException e) {
             LOGGER.warn("claim {} decode failed: {}", deliveryId, e.getMessage());
-            database.inTransaction(c -> deliveries.applyState(c, claiming, claiming.toFailed("decode failed")));
+            database.inTransaction(c -> deliveries.applyState(c, held, held.toFailed("decode failed")));
             return Outcome.fail(Result.DATABASE_FAILED, "Не удалось восстановить предмет");
         }
         if (stack.isEmpty()) {
-            database.inTransaction(c -> deliveries.applyState(c, claiming, claiming.toFailed("decode failed")));
+            database.inTransaction(c -> deliveries.applyState(c, held, held.toFailed("decode failed")));
             return Outcome.fail(Result.DATABASE_FAILED, "Не удалось восстановить предмет");
         }
         ItemStack leftover = inventory.give(actorId, stack);
         if (!leftover.isEmpty()) {
-            database.inTransaction(c -> deliveries.applyState(c, claiming,
-                    claiming.toPending("inventory full")));
+            database.inTransaction(c -> deliveries.applyState(c, held,
+                    held.reopenClaimable(now, "inventory full")));
             return Outcome.fail(Result.INVENTORY_FULL, "Инвентарь полон");
         }
         boolean completed = database.inTransaction(c ->
-                deliveries.applyState(c, claiming, claiming.toClaimed(now)));
+                deliveries.applyState(c, held, held.toClaimed(now)));
         return completed ? Outcome.ok("Письмо получено", null, List.of())
                 : Outcome.fail(Result.DATABASE_FAILED, "Не удалось завершить получение");
     }
@@ -574,12 +707,17 @@ public final class AuctionService {
                         OperationPhase.COMPLETE, now)
                 .operationId("expire-" + order.orderId()).build());
         if (order.side() == OrderSide.SELL && order.remainingQuantity() > 0) {
-            deliveries.insert(conn, AuctionDelivery.newDelivery(
-                            order.ownerUuid(), 0L, "expire-order-" + order.orderId(),
-                            DeliveryType.CANCELLED_RETURN,
-                            withQuantity(order.item(), order.remainingQuantity()), now)
-                    .dedupeKey("expire:" + order.orderId())
-                    .build());
+            insertClaimableDeliveries(conn, order.ownerUuid(), "expire-order-" + order.orderId(),
+                    DeliveryType.CANCELLED_RETURN, order.item(), order.remainingQuantity(), now);
+        }
+        if (order.side() == OrderSide.BUY && order.escrowReference() != null
+                && !order.escrowReference().isBlank()) {
+            EconomyGateway.ReleaseResult rel = economy.release(order.escrowReference(),
+                    "expire buy " + order.orderId(), "va:expire:" + order.orderId());
+            if (!rel.isSuccessOrIdempotent()) {
+                throw new DatabaseException("release при expire " + order.orderId()
+                        + " завершился " + rel.status());
+            }
         }
         completeOp(conn, "expire-" + order.orderId());
         return true;
@@ -633,7 +771,83 @@ public final class AuctionService {
         return database.query(conn -> trades.lastTradePrice(conn, key));
     }
 
+    // ================================================================ manual review
+
+    /** Внешний перевод ордера в ручное ревью (для RecoveryService). */
+    public void forceOrderManualReview(UUID orderId, String reason) {
+        try {
+            database.inTransaction(c -> {
+                Order order = orders.findById(c, orderId).orElse(null);
+                if (order == null || !order.isActive()) {
+                    return null;
+                }
+                orders.applyState(c, order, order.toManualReview(now()));
+                operations.insert(c, operationEntry(OperationType.RECOVERY,
+                                "op:manual-review:" + orderId, orderId, null,
+                                OperationPhase.BEGIN, now())
+                        .operationId("manual-review-" + orderId).build());
+                return null;
+            });
+            LOGGER.warn("Ордер {} отправлен на ручное ревью: {}", orderId, reason);
+        } catch (RuntimeException e) {
+            LOGGER.warn("forceOrderManualReview {} failed: {}", orderId, e.getMessage());
+        }
+    }
+
+    /**
+     * Карантин зависшего CLAIMING. После рестарта неизвестно, успел ли Minecraft
+     * сохранить уже выданный предмет, поэтому автоматический повтор небезопасен.
+     * FAILED требует ручной сверки и исключает дюп.
+     */
+    public boolean quarantineClaim(long deliveryId) {
+        return database.inTransaction(c -> {
+            AuctionDelivery d = deliveries.findById(c, deliveryId).orElse(null);
+            if (d == null || d.state() != DeliveryState.CLAIMING) {
+                return true;
+            }
+            return deliveries.applyState(c, d, d.toFailed(
+                    "indeterminate claim after restart; manual review required"));
+        });
+    }
+
     // ================================================================ helpers
+
+    private void markManualReview(Order order, UUID tradeId, String reason) {
+        long now = now();
+        try {
+            database.inTransaction(c -> {
+                Order fresh = orders.findById(c, order.orderId()).orElse(order);
+                if (fresh.isActive()) {
+                    orders.applyState(c, fresh, fresh.toManualReview(now));
+                }
+                operations.findById(c, "fill-" + tradeId)
+                        .ifPresent(op -> operations.applyRetry(c, op.operationId(),
+                                op.attemptCount(), op.toManualReview(reason, now())));
+                return null;
+            });
+        } catch (RuntimeException e) {
+            LOGGER.warn("MANUAL_REVIEW mark failed: {}", e.getMessage());
+        }
+    }
+
+    private void markCreateBuyFailed(UUID orderId, String reason) {
+        long now = now();
+        try {
+            database.inTransaction(c -> {
+                Order fresh = orders.findById(c, orderId).orElse(null);
+                if (fresh != null && fresh.isActive()) {
+                    orders.applyState(c, fresh, fresh.toManualReview(now));
+                }
+                operations.findById(c, "create-buy-" + orderId)
+                        .ifPresent(op -> operations.applyRetry(c, op.operationId(),
+                                op.attemptCount(), op.toManualReview(reason, now)));
+                return null;
+            });
+        } catch (RuntimeException e) {
+            LOGGER.error("Не удалось остановить необеспеченный BUY {}: {}", orderId,
+                    e.getMessage(), e);
+        }
+    }
 
     private int countActiveOrders(UUID owner, OrderSide side) {
         return database.query(conn -> {
@@ -668,26 +882,67 @@ public final class AuctionService {
                 .orElse(false);
     }
 
-    private void markManualReview(Order order, UUID tradeId, String reason) {
+    private long commissionOf(long makerPrice, int chunk) {
+        long gross = Math.multiplyExact(makerPrice, (long) chunk);
+        long bps = settings.commissionBps();
+        return Math.addExact(Math.multiplyExact(gross / 10_000L, bps),
+                Math.multiplyExact(gross % 10_000L, bps) / 10_000L);
+    }
+
+    private static String refFor(UUID buyOrderId, int epoch) {
+        return REF_BUY + buyOrderId + ":" + epoch;
+    }
+
+    private static UUID deterministicTradeId(UUID buyOrderId, UUID sellOrderId, int epoch) {
+        return UUID.nameUUIDFromBytes((buyOrderId + ":" + sellOrderId + ":" + epoch)
+                .getBytes(StandardCharsets.UTF_8));
+    }
+
+    /** Перекодирует снимок под нужное количество (blob и hash согласованы — decode().quantity совпадёт, #5). */
+    private ItemSnapshot withQuantity(ItemSnapshot unit, int quantity) {
+        if (quantity <= 0) {
+            throw new IllegalArgumentException("quantity must be > 0");
+        }
+        if (quantity == unit.quantity()) {
+            return unit;
+        }
         try {
-            database.inTransaction(c -> {
-                Order fresh = orders.findById(c, order.orderId()).orElse(order);
-                if (fresh.isActive()) {
-                    orders.applyState(c, fresh, fresh.toManualReview(now()));
-                }
-                operations.findById(c, "fill-" + tradeId)
-                        .ifPresent(op -> operations.applyRetry(c, op.operationId(), op.attemptCount(),
-                                op.toManualReview(reason, now())));
-                return null;
-            });
-        } catch (RuntimeException e) {
-            LOGGER.warn("MANUAL_REVIEW mark failed: {}", e.getMessage());
+            ItemStack stack = codec.decode(unit);
+            stack.setCount(quantity);
+            return codec.encode(stack);
+        } catch (ItemCodecException e) {
+            throw new DatabaseException("не удалось перекодировать количество " + quantity, e);
         }
     }
 
-    private static UUID deterministicTradeId(UUID buyOrderId, UUID sellOrderId, int seq) {
-        return UUID.nameUUIDFromBytes(
-                (buyOrderId + ":" + sellOrderId + ":" + seq).getBytes(StandardCharsets.UTF_8));
+    /**
+     * Вставка письма (писем) с корректно сериализованным количеством, по частям
+     * не больше max stack size предмета и 64.
+     * Письма сразу CLAIMABLE, dedupeKey уникален (повтор recovery не дублирует).
+     */
+    private void insertClaimableDeliveries(Connection conn, UUID playerUuid, String baseOpId,
+                                           DeliveryType type, ItemSnapshot unit, int quantity, long now) {
+        int remaining = quantity;
+        int part = 0;
+        int maxChunk;
+        try {
+            maxChunk = Math.max(1, Math.min(MAX_DELIVERY_CHUNK, codec.decode(unit).getMaxStackSize()));
+        } catch (ItemCodecException e) {
+            throw new DatabaseException("не удалось определить размер delivery-стека", e);
+        }
+        while (remaining > 0) {
+            int q = Math.min(maxChunk, remaining);
+            String dedupe = baseOpId + (part == 0 ? "" : ":" + part);
+            if (deliveries.findByDedupeKey(conn, dedupe).isEmpty()) {
+                deliveries.insert(conn, AuctionDelivery.newDelivery(playerUuid, 0L, baseOpId, type,
+                                withQuantity(unit, q), now)
+                        .dedupeKey(dedupe)
+                        .state(DeliveryState.CLAIMABLE)
+                        .build());
+            }
+            remaining -= q;
+            part++;
+        }
     }
 
     private String marketKeyOf(ItemStack unit) {
@@ -702,11 +957,6 @@ public final class AuctionService {
         ItemStack copy = unit.copy();
         copy.setCount(1);
         return codec.encode(copy);
-    }
-
-    private static ItemSnapshot withQuantity(ItemSnapshot unit, int quantity) {
-        return new ItemSnapshot(unit.serializedData(), unit.codecVersion(), unit.hash(),
-                unit.registryId(), unit.displayName(), unit.searchName(), quantity);
     }
 
     private static long now() {

@@ -108,6 +108,23 @@ public final class DeliveryRepository {
         }
     }
 
+    /** Письма в заданном состоянии (для recovery: CLAIMING и т.п.). */
+    public List<AuctionDelivery> listByState(Connection c, DeliveryState state) {
+        String sql = "SELECT " + COLUMNS + " FROM auction_deliveries WHERE state = ? ORDER BY created_at";
+        try (PreparedStatement ps = c.prepareStatement(sql)) {
+            ps.setString(1, state.name());
+            try (ResultSet rs = ps.executeQuery()) {
+                List<AuctionDelivery> out = new ArrayList<>();
+                while (rs.next()) {
+                    out.add(map(rs));
+                }
+                return out;
+            }
+        } catch (SQLException e) {
+            throw new DatabaseException("deliveries by state failed: " + state, e);
+        }
+    }
+
     /** Оптимистичное обновление изменяемого состояния delivery. */
     public boolean applyState(Connection c, AuctionDelivery expected, AuctionDelivery updated) {
         String sql = "UPDATE auction_deliveries SET state=?, claimable_at=?, claim_started_at=?, "

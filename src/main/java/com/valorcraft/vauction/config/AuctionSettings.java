@@ -55,7 +55,7 @@ public record AuctionSettings(
                 90,                     // historyRetentionDays
                 false,                  // allowSelfPurchase
                 false,                  // allowContainersWithContents
-                true,                   // blockCustomNbt
+                false,                  // blockCustomNbt: MarketKey разделяет по полному NBT, контент не теряется
                 true,                   // allowEnchantedBooks
                 262_144,                // maxCompressedItemBytes
                 2_097_152,              // maxUncompressedItemBytes

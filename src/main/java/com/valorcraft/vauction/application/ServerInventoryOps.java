@@ -29,6 +29,23 @@ public final class ServerInventoryOps implements InventoryOps {
     }
 
     @Override
+    public int availableCount(UUID playerId, ItemStack unit) {
+        ServerPlayer player = server.get() == null || server.get().getPlayerList() == null
+                ? null : server.get().getPlayerList().getPlayer(playerId);
+        if (player == null) {
+            return 0;
+        }
+        int available = 0;
+        for (int slot = 0; slot < player.getInventory().getContainerSize(); slot++) {
+            ItemStack s = player.getInventory().getItem(slot);
+            if (!s.isEmpty() && ItemStack.isSameItemSameTags(s, unit)) {
+                available += s.getCount();
+            }
+        }
+        return available;
+    }
+
+    @Override
     public boolean tryTake(UUID playerId, ItemStack unit, int quantity) {
         ServerPlayer player = server.get().getPlayerList() == null
                 ? null : server.get().getPlayerList().getPlayer(playerId);

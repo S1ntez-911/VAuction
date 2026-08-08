@@ -19,6 +19,7 @@ import com.valorcraft.vauction.persistence.OperationRepository;
 import com.valorcraft.vauction.persistence.OrderRepository;
 import com.valorcraft.vauction.persistence.SaleRepository;
 import com.valorcraft.vauction.persistence.TradeRepository;
+import com.valorcraft.vauction.recovery.RecoveryService;
 import net.minecraft.server.MinecraftServer;
 import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
@@ -57,6 +58,7 @@ public final class VAuctionCore {
     private ListingService listingService;
     private DeliveryService deliveryService;
     private AuctionService auctionService;
+    private RecoveryService recoveryService;
 
     private VAuctionCore() {}
 
@@ -109,6 +111,16 @@ public final class VAuctionCore {
                     core.operations, core.deliveries, core.codec,
                     new ExactItemMarketKeyStrategy(core.codec),
                     core.economyGateway, core.inventoryOps, core.settings);
+            core.recoveryService = new RecoveryService(core.database, core.orders, core.trades,
+                    core.deliveries, core.economyGateway, core.auctionService);
+
+            // 6а. автоматическое восстановление после краха (идемпотентно)
+            RecoveryService.ScanReport recovery = core.recoveryService.scan();
+            if (recovery.total() > 0) {
+                LOGGER.info("VAuction recovery: fills={}, escrows={}, claims={}, review={}",
+                        recovery.fillsFinished(), recovery.escrowsRestored(),
+                        recovery.claimsQuarantined(), recovery.ordersInManualReview());
+            }
 
             core.state = State.RUNNING;
             instance = core;
@@ -203,5 +215,9 @@ public final class VAuctionCore {
 
     public DeliveryService deliveryService() {
         return deliveryService;
+    }
+
+    public RecoveryService recoveryService() {
+        return recoveryService;
     }
 }

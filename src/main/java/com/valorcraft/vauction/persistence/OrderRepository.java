@@ -238,6 +238,20 @@ public final class OrderRepository {
         }
     }
 
+    /** Все активные ордера (для recovery-обеспечения escrow). */
+    public List<Order> listActive(Connection c, int limit) {
+        String sql = "SELECT " + COLUMNS + " FROM auction_orders "
+                + "WHERE status = 'ACTIVE' ORDER BY created_at LIMIT ?";
+        try (PreparedStatement ps = c.prepareStatement(sql)) {
+            ps.setInt(1, limit);
+            try (ResultSet rs = ps.executeQuery()) {
+                return mapAll(rs);
+            }
+        } catch (SQLException e) {
+            throw new DatabaseException("active orders list failed", e);
+        }
+    }
+
     /* ------------------------------- mapping ------------------------------- */
 
     private static List<Order> mapAll(ResultSet rs) throws SQLException {
@@ -261,13 +275,14 @@ public final class OrderRepository {
         ps.setString(10, o.item().displayName());
         ps.setString(11, o.item().searchName());
         ps.setLong(12, o.item().quantity());
-        ps.setInt(13, o.originalQuantity());
-        ps.setInt(14, o.remainingQuantity());
-        ps.setInt(15, o.filledQuantity());
-        ps.setString(16, o.escrowReference());
-        ps.setInt(17, o.refEpoch());
-        ps.setLong(18, o.createdAt());
-        ps.setLong(19, o.updatedAt());
+        ps.setLong(13, o.pricePerUnit());
+        ps.setInt(14, o.originalQuantity());
+        ps.setInt(15, o.remainingQuantity());
+        ps.setInt(16, o.filledQuantity());
+        ps.setString(17, o.escrowReference());
+        ps.setInt(18, o.refEpoch());
+        ps.setLong(19, o.createdAt());
+        ps.setLong(20, o.updatedAt());
     }
 
     private static Order map(ResultSet rs) throws SQLException {

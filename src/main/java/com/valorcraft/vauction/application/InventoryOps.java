@@ -16,6 +16,13 @@ public interface InventoryOps {
     boolean tryTake(UUID playerId, ItemStack unit, int quantity);
 
     /**
+     * Сколько единиц {@code unit} доступно в инвентаре (по идентичным
+     * стекам — без учёта занятости слотов). Используется для создания
+     * sell-ордера из нескольких слотов сразу.
+     */
+    int availableCount(UUID playerId, ItemStack unit);
+
+    /**
      * Выдать {@code stack} игроку.
      * @return пустой стек — выдано всё; иначе — стек целиком не поместился
      *         (ничего не выдано).
