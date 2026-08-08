@@ -171,6 +171,34 @@ public final class OrderRepository {
         }
     }
 
+    /** Best indexed crossing order that predates the durable incoming row (therefore the maker). */
+    public Optional<Order> bestCounterpart(Connection c, String marketKey, OrderSide incomingSide,
+                                           long incomingPrice, UUID incomingOwner,
+                                           boolean allowSelfTrade, UUID incomingOrderId) {
+        OrderSide makerSide = incomingSide == OrderSide.BUY ? OrderSide.SELL : OrderSide.BUY;
+        String pricePredicate = makerSide == OrderSide.SELL
+                ? "price_per_unit <= ?" : "price_per_unit >= ?";
+        String priceOrder = makerSide == OrderSide.SELL ? "ASC" : "DESC";
+        String sql = "SELECT " + COLUMNS + " FROM auction_orders WHERE market_key=? AND side=? "
+                + "AND status='ACTIVE' AND processing_state='NONE' AND " + pricePredicate + " "
+                + "AND rowid < (SELECT rowid FROM auction_orders WHERE order_id=?) "
+                + (allowSelfTrade ? "" : "AND owner_uuid <> ? ")
+                + "ORDER BY price_per_unit " + priceOrder + ", created_at, order_id LIMIT 1";
+        try (PreparedStatement ps = c.prepareStatement(sql)) {
+            int i = 1;
+            ps.setString(i++, marketKey);
+            ps.setString(i++, makerSide.name());
+            ps.setLong(i++, incomingPrice);
+            ps.setString(i++, incomingOrderId.toString());
+            if (!allowSelfTrade) ps.setString(i, incomingOwner.toString());
+            try (ResultSet rs = ps.executeQuery()) {
+                return rs.next() ? Optional.of(map(rs)) : Optional.empty();
+            }
+        } catch (SQLException e) {
+            throw new DatabaseException("best counterpart failed", e);
+        }
+    }
+
     /** Consume a BUY epoch and atomically acquire its unique in-flight fill lock. */
     public Integer tryConsumeBuyForFill(Connection c, Order expected, int done, long now) {
         if (expected.side() != OrderSide.BUY || done <= 0) {
@@ -289,6 +317,43 @@ public final class OrderRepository {
             }
         } catch (SQLException e) {
             throw new DatabaseException("processing orders list failed", e);
+        }
+    }
+
+    public List<Order> listProcessingAfter(Connection c, long updatedAfter, String orderIdAfter,
+                                           int limit) {
+        String sql = "SELECT " + COLUMNS + " FROM auction_orders WHERE processing_state <> 'NONE' "
+                + "AND (updated_at > ? OR (updated_at = ? AND order_id > ?)) "
+                + "ORDER BY updated_at, order_id LIMIT ?";
+        try (PreparedStatement ps = c.prepareStatement(sql)) {
+            ps.setLong(1, updatedAfter);
+            ps.setLong(2, updatedAfter);
+            ps.setString(3, orderIdAfter == null ? "" : orderIdAfter);
+            ps.setInt(4, Math.max(1, limit));
+            try (ResultSet rs = ps.executeQuery()) {
+                return mapAll(rs);
+            }
+        } catch (SQLException e) {
+            throw new DatabaseException("processing orders page failed", e);
+        }
+    }
+
+    public List<Order> listActiveBuysAfter(Connection c, long createdAfter, String orderIdAfter,
+                                           int limit) {
+        String sql = "SELECT " + COLUMNS + " FROM auction_orders WHERE side='BUY' "
+                + "AND status='ACTIVE' AND processing_state='NONE' "
+                + "AND (created_at > ? OR (created_at = ? AND order_id > ?)) "
+                + "ORDER BY created_at, order_id LIMIT ?";
+        try (PreparedStatement ps = c.prepareStatement(sql)) {
+            ps.setLong(1, createdAfter);
+            ps.setLong(2, createdAfter);
+            ps.setString(3, orderIdAfter == null ? "" : orderIdAfter);
+            ps.setInt(4, Math.max(1, limit));
+            try (ResultSet rs = ps.executeQuery()) {
+                return mapAll(rs);
+            }
+        } catch (SQLException e) {
+            throw new DatabaseException("active BUY page failed", e);
         }
     }
 

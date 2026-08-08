@@ -125,6 +125,29 @@ public final class DeliveryRepository {
         }
     }
 
+    public List<AuctionDelivery> listByState(Connection c, DeliveryState state, int limit) {
+        return listByStateAfter(c, state, 0L, limit);
+    }
+
+    /** Indexed keyset page for bounded/startup recovery. */
+    public List<AuctionDelivery> listByStateAfter(Connection c, DeliveryState state,
+                                                   long deliveryIdAfter, int limit) {
+        String sql = "SELECT " + COLUMNS + " FROM auction_deliveries "
+                + "WHERE state = ? AND delivery_id > ? ORDER BY delivery_id LIMIT ?";
+        try (PreparedStatement ps = c.prepareStatement(sql)) {
+            ps.setString(1, state.name());
+            ps.setLong(2, deliveryIdAfter);
+            ps.setInt(3, Math.max(1, limit));
+            try (ResultSet rs = ps.executeQuery()) {
+                List<AuctionDelivery> out = new ArrayList<>();
+                while (rs.next()) out.add(map(rs));
+                return out;
+            }
+        } catch (SQLException e) {
+            throw new DatabaseException("deliveries state page failed: " + state, e);
+        }
+    }
+
     /** Оптимистичное обновление изменяемого состояния delivery. */
     public boolean applyState(Connection c, AuctionDelivery expected, AuctionDelivery updated) {
         String sql = "UPDATE auction_deliveries SET state=?, claimable_at=?, claim_started_at=?, "
