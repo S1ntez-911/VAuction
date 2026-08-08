@@ -2,18 +2,24 @@ package com.valorcraft.vauction.bootstrap;
 
 import com.valorcraft.vauction.application.AuctionService;
 import com.valorcraft.vauction.application.DeliveryService;
+import com.valorcraft.vauction.application.InventoryOps;
 import com.valorcraft.vauction.application.ListingService;
+import com.valorcraft.vauction.application.ServerInventoryOps;
 import com.valorcraft.vauction.config.AuctionConfig;
 import com.valorcraft.vauction.config.AuctionSettings;
 import com.valorcraft.vauction.economy.EconomyGateway;
 import com.valorcraft.vauction.economy.VEconomyGateway;
+import com.valorcraft.vauction.item.ExactItemMarketKeyStrategy;
 import com.valorcraft.vauction.item.ItemStackCodec;
 import com.valorcraft.vauction.persistence.BuyOrderRepository;
 import com.valorcraft.vauction.persistence.DatabaseManager;
 import com.valorcraft.vauction.persistence.DeliveryRepository;
 import com.valorcraft.vauction.persistence.ListingRepository;
 import com.valorcraft.vauction.persistence.OperationRepository;
+import com.valorcraft.vauction.persistence.OrderRepository;
 import com.valorcraft.vauction.persistence.SaleRepository;
+import com.valorcraft.vauction.persistence.TradeRepository;
+import net.minecraft.server.MinecraftServer;
 import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
 
@@ -45,6 +51,9 @@ public final class VAuctionCore {
     private DeliveryRepository deliveries;
     private SaleRepository sales;
     private OperationRepository operations;
+    private OrderRepository orders;
+    private TradeRepository trades;
+    private InventoryOps inventoryOps;
     private ListingService listingService;
     private DeliveryService deliveryService;
     private AuctionService auctionService;
@@ -59,7 +68,7 @@ public final class VAuctionCore {
     }
 
     /** Старт серверного ядра (вызывается на ServerStartedEvent). */
-    public static synchronized void start(Path databasePath) {
+    public static synchronized void start(Path databasePath, MinecraftServer server) {
         VAuctionCore core = instance();
         if (core.state == State.RUNNING || core.state == State.STOPPED) {
             return;
@@ -75,7 +84,10 @@ public final class VAuctionCore {
             }
             // 2. проверка VEconomy (мод обязателен в mods.toml; проверяем фактическую готовность API)
             core.economyGateway = new VEconomyGateway();
-            LOGGER.info("Экономика VEconomy: {}", core.economyGateway.status());
+            if (!core.economyGateway.isAvailable()) {
+                throw new IllegalStateException("VEconomy недоступна (мод economy_core не запущен?)");
+            }
+            LOGGER.info("Экономика VEconomy готова");
 
             // 3-4-5. БД + миграции + проверка схемы (при сбое — FAILED и останов)
             core.database = DatabaseManager.openSqlite(databasePath);
@@ -88,17 +100,23 @@ public final class VAuctionCore {
             core.deliveries = new DeliveryRepository();
             core.sales = new SaleRepository();
             core.operations = new OperationRepository();
+            core.orders = new OrderRepository();
+            core.trades = new TradeRepository();
+            core.inventoryOps = new ServerInventoryOps(() -> server);
             core.listingService = new ListingService(core.database, core.listings, core.operations, core.codec);
             core.deliveryService = new DeliveryService(core.database, core.deliveries);
-            core.auctionService = new AuctionService(core.database, core.listings, core.buyOrders,
-                    core.sales, core.deliveries, core.operations, core.codec, core.listingService, core.settings);
+            core.auctionService = new AuctionService(core.database, core.orders, core.trades,
+                    core.operations, core.deliveries, core.codec,
+                    new ExactItemMarketKeyStrategy(core.codec),
+                    core.economyGateway, core.inventoryOps, core.settings);
 
             core.state = State.RUNNING;
             instance = core;
             // 7. итоговый лог запуска
             LOGGER.info("VAuction запущен: БД={}, схема v{}, политика предметов={}, комиссия={} bps, "
-                            + "длительность лота={} ч", databasePath, core.database.schemaVersion(),
-                    settings.itemPolicyMode(), settings.commissionBps(), settings.listingDurationHours());
+                            + "стакан={}", databasePath, core.database.schemaVersion(),
+                    settings.itemPolicyMode(), settings.commissionBps(),
+                    "orders+trades");
         } catch (Throwable t) {
             core.state = State.FAILED;
             if (core.database != null) {

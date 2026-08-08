@@ -67,7 +67,8 @@ class DatabaseTest {
     void migrationCreatesAllTables() {
         Set<String> tables = db.query(this::readTables);
         assertEquals(Set.of("auction_listings", "auction_buy_orders", "auction_deliveries",
-                "auction_sales", "auction_operation_log", "schema_version"), tables);
+                "auction_sales", "auction_operation_log", "auction_orders", "auction_trades",
+                "schema_version"), tables);
         assertTrue(db.schemaVersion() >= 1, "schema version must be >= 1");
     }
 

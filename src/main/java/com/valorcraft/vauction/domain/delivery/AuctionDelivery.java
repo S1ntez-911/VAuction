@@ -81,6 +81,16 @@ public record AuctionDelivery(
                 claimStartedAt, claimedAt, claimToken, error, version);
     }
 
+    /** Снять с попытки выдачи обратно в PENDING (инвентарь был полон). */
+    public AuctionDelivery toPending(String error) {
+        if (state != DeliveryState.CLAIMING && state != DeliveryState.CLAIMABLE) {
+            throw new IllegalStateException("cannot reopen delivery in state " + state);
+        }
+        return new AuctionDelivery(deliveryId, dedupeKey, playerUuid, listingId, operationId,
+                deliveryType, DeliveryState.PENDING, item, createdAt, null,
+                null, null, claimToken, error, version);
+    }
+
     public static Builder newDelivery(UUID playerUuid, long listingId, String operationId,
                                       DeliveryType type, ItemSnapshot item, long createdAt) {
         return new Builder(playerUuid, listingId, operationId, type, item, createdAt);

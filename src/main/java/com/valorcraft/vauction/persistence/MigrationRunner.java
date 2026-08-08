@@ -38,7 +38,8 @@ public final class MigrationRunner {
     /** Все миграции по порядку (по номеру версии, извлекаемому из имени файла). */
     private static final String[] MIGRATION_FILES = {
             "V001__initial_schema.sql",
-            "V002__buy_orders.sql"
+            "V002__buy_orders.sql",
+            "V003__unified_market.sql"
     };
 
     private static final Logger LOGGER = LogManager.getLogger("VAuction");
