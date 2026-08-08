@@ -90,7 +90,7 @@ public final class TradeRepository {
 
     /** Последняя цена сделки по рынку (или 0). */
     public long lastTradePrice(Connection c, String marketKey) {
-        String sql = "SELECT execution_price FROM auction_trades WHERE market_key = ? "
+        String sql = "SELECT execution_price FROM auction_trades WHERE market_key = ? AND state = 'SETTLED' "
                 + "ORDER BY created_at DESC LIMIT 1";
         try (PreparedStatement ps = c.prepareStatement(sql)) {
             ps.setString(1, marketKey);

@@ -10,6 +10,7 @@ import com.valorcraft.vauction.domain.operation.AuctionOperation;
 import com.valorcraft.vauction.domain.operation.OperationPhase;
 import com.valorcraft.vauction.domain.operation.OperationType;
 import com.valorcraft.vauction.domain.order.Order;
+import com.valorcraft.vauction.domain.order.OrderProcessingState;
 import com.valorcraft.vauction.domain.order.OrderSide;
 import com.valorcraft.vauction.domain.trade.Trade;
 import com.valorcraft.vauction.domain.trade.TradeState;
@@ -51,7 +52,7 @@ import java.util.UUID;
  *   <li>S2 intent: trade(PENDING) + журнал + CAS-потребление обеих сторон
  *       (при любом сбое БД — откат целиком, КОМПЕНСАЦИЯ НЕ ТРЕБУЕТСЯ);</li>
  *   <li>S3 settle старой эпохи: продавец(net) + казна(комиссия) + покупатель(refund);</li>
- *   <li>S4 relock новой эпохи (если остаток) и финальная фиксация:
+ *   <li>S4 атомарный rollover новой эпохи (если остаток) и финальная фиксация:
  *       trade→SETTLED, delivery→CLAIMABLE, {@code escrowReference/refEpoch} ордера.</li>
  * </ul>
  * Каждый пункт можно безопасно повторить после краха ({@link RecoveryService}).
@@ -139,7 +140,7 @@ public final class AuctionService {
         if (sellerId == null || item == null || item.isEmpty()) {
             return Outcome.fail(Result.NOT_A_PLAYER, "Продавец не определён");
         }
-        return placeSell(sellerId, item, pricePerUnit, quantity);
+        return placeSell(sellerId, item, pricePerUnit, quantity, false);
     }
 
     /** Выставить на продажу из слота инвентаря (сбор одинаковых стеков из нескольких слотов). */
@@ -165,16 +166,7 @@ public final class AuctionService {
             return Outcome.fail(Result.INSUFFICIENT_ITEMS,
                     "Недостаточно предметов в инвентаре (доступно " + available + ")");
         }
-        if (!inventory.tryTake(seller.getUUID(), probe, quantity)) {
-            return Outcome.fail(Result.INSUFFICIENT_ITEMS, "Не удалось списать предметы");
-        }
-        ItemStack sellUnit = stack.copy();
-        sellUnit.setCount(quantity);
-        Outcome outcome = createSellOrder(seller.getUUID(), sellUnit, pricePerUnit, quantity);
-        if (!outcome.isSuccess()) {
-            inventory.give(seller.getUUID(), sellUnit);
-        }
-        return outcome;
+        return placeSell(seller.getUUID(), probe, pricePerUnit, quantity, true);
     }
 
     public Outcome createBuyOrder(UUID buyerId, ItemStack unit, long pricePerUnit, int quantity) {
@@ -305,7 +297,8 @@ public final class AuctionService {
                 finalOrder, fills);
     }
 
-    private Outcome placeSell(UUID sellerId, ItemStack unit, long pricePerUnit, int quantity) {
+    private Outcome placeSell(UUID sellerId, ItemStack unit, long pricePerUnit, int quantity,
+                              boolean lockInventory) {
         if (quantity <= 0) {
             return Outcome.fail(Result.INVALID_QUANTITY, "Количество должно быть положительным");
         }
@@ -338,18 +331,45 @@ public final class AuctionService {
         try {
             Order created = Order.newOrder(sellerId, OrderSide.SELL, key, unitSnapshot,
                             pricePerUnit, quantity, now)
-                    .orderId(orderId).build();
+                    .orderId(orderId)
+                    .processingState(lockInventory ? OrderProcessingState.ITEM_LOCK
+                            : OrderProcessingState.NONE)
+                    .build();
             order = created;
             database.inTransaction(conn -> {
                 orders.insert(conn, created);
                 operations.insert(conn, operationEntry(OperationType.CREATE_SELL_ORDER,
                                 "op:create-sell:" + orderId, orderId, sellerId,
-                                OperationPhase.COMPLETE, now)
+                                lockInventory ? OperationPhase.ITEM_LOCK : OperationPhase.COMPLETE, now)
                         .operationId("create-sell-" + orderId).build());
                 return null;
             });
         } catch (RuntimeException e) {
             return Outcome.fail(Result.DATABASE_FAILED, e.getMessage());
+        }
+
+        if (lockInventory) {
+            if (!inventory.tryTake(sellerId, unit, quantity)) {
+                database.inTransaction(conn -> {
+                    Order pending = orders.findById(conn, orderId).orElseThrow();
+                    orders.applyState(conn, pending, pending.cancelled(now()));
+                    completeOp(conn, "create-sell-" + orderId);
+                    return null;
+                });
+                return Outcome.fail(Result.INSUFFICIENT_ITEMS, "Не удалось списать предметы");
+            }
+            try {
+                order = database.inTransaction(conn -> {
+                    Order pending = orders.findById(conn, orderId).orElseThrow();
+                    Order active = pending.withProcessingState(OrderProcessingState.NONE, now());
+                    if (!orders.applyState(conn, pending, active)) {
+                        throw new DatabaseException("SELL item-lock activation conflict " + orderId);
+                    }
+                    return orders.findById(conn, orderId).orElseThrow();
+                });
+            } catch (RuntimeException e) {
+                return Outcome.fail(Result.DATABASE_FAILED, e.getMessage());
+            }
         }
 
         List<Order> resting = database.query(conn ->
@@ -387,7 +407,8 @@ public final class AuctionService {
     // ================================================================ fill-сага
 
     /**
-     * Один chunk. S2 (intent, tx) → S3 (settlement) → S4 (relock + finalize).
+     * Один chunk. S2 (intent + persistent epoch lock) → S3 (atomic settlement+rollover)
+     * → S4 (local finalize).
      * Возвращает Trade или {@code null} при сбое одного из шагов
      * (повтор этого же fill — идемпотентен через tradeId и escrow-ref).
      */
@@ -420,7 +441,7 @@ public final class AuctionService {
                 if (orders.tryConsume(conn, sellOrder, chunk, now) == null) {
                     throw new DatabaseException("sell consume conflict " + sellOrder.orderId());
                 }
-                if (orders.tryConsume(conn, buyOrder, chunk, now) == null) {
+                if (orders.tryConsumeBuyForFill(conn, buyOrder, chunk, now) == null) {
                     throw new DatabaseException("buy consume conflict " + buyOrder.orderId());
                 }
                 return null;
@@ -484,7 +505,14 @@ public final class AuctionService {
             markManualReview(buyOrder, trade.tradeId(), "overflow escrow");
             return false;
         }
-        long refund = locked - gross;
+        long nextLocked;
+        try {
+            nextLocked = Math.multiplyExact((long) remainingAfter, buyOrder.pricePerUnit());
+        } catch (ArithmeticException e) {
+            markManualReview(buyOrder, trade.tradeId(), "overflow next escrow");
+            return false;
+        }
+        long refund = locked - gross - nextLocked;
         if (refund < 0) {
             LOGGER.error("refund<0 для {} (locked={}, gross={})", trade.tradeId(), locked, gross);
             markManualReview(buyOrder, trade.tradeId(), "refund<0");
@@ -503,51 +531,31 @@ public final class AuctionService {
         if (refund > 0) {
             credits.add(new EconomyGateway.Credit(trade.buyerUuid(), refund, ROLE_BUYER_REFUND));
         }
-        EconomyGateway.SettleResult settled = economy.settle(ref, credits,
-                "settle " + trade.tradeId(), "va:settle:" + trade.tradeId());
+        boolean advance = remainingAfter > 0;
+        int nextEpoch = buyOrder.refEpoch() + 1;
+        String nextRef = advance ? refFor(buyOrder.orderId(), nextEpoch) : null;
+        EconomyGateway.SettleResult settled = economy.settleAndRollover(ref, credits,
+                nextRef, nextLocked, "settle+rollover " + trade.tradeId(),
+                "va:rollover:" + trade.tradeId());
         if (!settled.isSuccessOrIdempotent()) {
             LOGGER.warn("S3 settle failed {}: {}", trade.tradeId(), settled.status());
-            markManualReview(buyOrder, trade.tradeId(), "settle " + settled.status());
+            if (settled.status() == EconomyGateway.SettleStatus.CONFLICT
+                    || settled.status() == EconomyGateway.SettleStatus.NOT_FOUND) {
+                markManualReview(buyOrder, trade.tradeId(), "rollover " + settled.status());
+            }
             return false;
         }
 
-        // S4a: новая эпоха резерва (только если остался невыполненный остаток)
-        boolean advance = remainingAfter > 0;
-        int nextEpoch = buyOrder.refEpoch() + 1;
-        String nextRef;
-        if (advance) {
-            long nextLocked;
-            try {
-                nextLocked = Math.multiplyExact((long) remainingAfter, buyOrder.pricePerUnit());
-            } catch (ArithmeticException e) {
-                markManualReview(buyOrder, trade.tradeId(), "overflow next escrow");
-                return false;
-            }
-            nextRef = refFor(buyOrder.orderId(), nextEpoch);
-            EconomyGateway.ReserveResult relock = economy.reserve(trade.buyerUuid(), nextLocked,
-                    nextRef, "buy hold " + buyOrder.orderId() + " e" + nextEpoch,
-                    "va:relock:" + trade.tradeId());
-            if (!relock.isSuccessOrIdempotent()) {
-                LOGGER.warn("S4 relock failed {}: {}", trade.tradeId(), relock.status());
-                // Текущий fill уже оплачен атомарным settlement. Его нужно завершить и
-                // выдать покупателю; небезопасен только НЕИСПОЛНЕННЫЙ остаток BUY.
-                markManualReview(buyOrder, trade.tradeId(), "relock " + relock.status());
-                advance = false;
-                nextRef = null;
-            }
-        } else {
-            nextRef = null;
-        }
-
         // S4b: финальная фиксация (транзакция; повторимая)
-        boolean shouldAdvance = advance;
         String committedRef = nextRef;
         try {
             database.inTransaction(conn -> {
                 Order pendingOrder = orders.findById(conn, buyOrder.orderId()).orElse(buyOrder);
-                if (shouldAdvance && pendingOrder.isActive()) {
-                    orders.applyState(conn, pendingOrder,
-                            pendingOrder.withRefEpoch(nextEpoch, committedRef, now));
+                if (pendingOrder.processingState() == OrderProcessingState.FILL) {
+                    Order finalized = pendingOrder.finalizeFill(nextEpoch, committedRef, now);
+                    if (!orders.applyState(conn, pendingOrder, finalized)) {
+                        throw new DatabaseException("BUY fill finalize conflict " + buyOrder.orderId());
+                    }
                 }
                 Trade current = trades.findById(conn, trade.tradeId()).orElse(trade);
                 trades.markSettled(conn, current, now);
@@ -568,8 +576,9 @@ public final class AuctionService {
 
     public Outcome cancel(UUID actorId, UUID orderId, String reason) {
         long now = now();
+        Outcome intent;
         try {
-            return database.inTransaction(conn -> {
+            intent = database.inTransaction(conn -> {
                 Optional<Order> found = orders.findById(conn, orderId);
                 if (found.isEmpty()) {
                     return Outcome.fail(Result.ORDER_NOT_FOUND, "Ордер не найден");
@@ -578,37 +587,31 @@ public final class AuctionService {
                 if (!order.ownerUuid().equals(actorId)) {
                     return Outcome.fail(Result.NOT_YOUR_ORDER, "Не ваш ордер");
                 }
-                if (!order.isActive()) {
+                if (!order.isActive() || order.processingState() != OrderProcessingState.NONE) {
                     return Outcome.fail(Result.ORDER_NOT_FOUND, "Ордер уже завершён");
                 }
-                Order cancelled = order.cancelled(now);
-                if (!orders.applyState(conn, order, cancelled)) {
+                Order pending = order.withProcessingState(OrderProcessingState.CANCEL, now);
+                if (!orders.applyState(conn, order, pending)) {
                     return Outcome.fail(Result.DATABASE_FAILED, "Конфликт при отмене");
                 }
                 operations.insert(conn, operationEntry(OperationType.CANCEL_ORDER,
                                 reason == null ? "op:cancel:" + orderId : "op:cancel:" + orderId,
-                                orderId, actorId, OperationPhase.COMPLETE, now)
+                                orderId, actorId, OperationPhase.BEGIN, now)
                         .operationId("cancel-order-" + orderId).build());
-                if (order.side() == OrderSide.SELL && order.remainingQuantity() > 0) {
-                    insertClaimableDeliveries(conn, actorId, "cancel-order-" + orderId,
-                            DeliveryType.CANCELLED_RETURN, order.item(), order.remainingQuantity(), now);
-                }
-                if (order.side() == OrderSide.BUY
-                        && order.escrowReference() != null
-                        && !order.escrowReference().isBlank()) {
-                    EconomyGateway.ReleaseResult rel = economy.release(order.escrowReference(),
-                            "cancel buy " + orderId, "va:cancel:" + orderId);
-                    if (!rel.isSuccessOrIdempotent()) {
-                        throw new DatabaseException("release при cancel " + orderId
-                                + " завершился " + rel.status());
-                    }
-                }
-                completeOp(conn, "cancel-order-" + orderId);
-                return Outcome.ok("Ордер отменён", cancelled, List.of());
+                return Outcome.ok("Отмена ордера зафиксирована", pending, List.of());
             });
         } catch (RuntimeException e) {
             return Outcome.fail(Result.DATABASE_FAILED, e.getMessage());
         }
+        if (!intent.isSuccess()) {
+            return intent;
+        }
+        if (!resumePendingOrder(orderId)) {
+            return Outcome.fail(Result.ECONOMY_FAILED,
+                    "Отмена зафиксирована и будет завершена recovery");
+        }
+        Order done = database.query(c -> orders.findById(c, orderId).orElse(null));
+        return Outcome.ok("Ордер отменён", done, List.of());
     }
 
     // ================================================================ claim
@@ -672,55 +675,89 @@ public final class AuctionService {
 
     public int expirePass(long now) {
         int processed = 0;
-        long sellCutoff = now - (long) settings.sellOrderExpiryDays() * MILLIS_PER_DAY;
-        List<Order> sells = database.query(c ->
-                orders.oldestActive(c, OrderSide.SELL, sellCutoff, BOOK_QUERY_LIMIT));
-        for (Order o : sells) {
-            try {
-                database.inTransaction(c -> expireSingle(c, o, now));
-                processed++;
-            } catch (RuntimeException e) {
-                LOGGER.warn("expire SELL {} failed: {}", o.orderId(), e.getMessage());
+        if (settings.sellOrderExpiryDays() > 0) {
+            long sellCutoff = now - (long) settings.sellOrderExpiryDays() * MILLIS_PER_DAY;
+            List<Order> sells = database.query(c ->
+                    orders.oldestActive(c, OrderSide.SELL, sellCutoff, BOOK_QUERY_LIMIT));
+            for (Order o : sells) {
+                if (beginExpiry(o, now) && resumePendingOrder(o.orderId())) {
+                    processed++;
+                }
             }
         }
-        long buyCutoff = now - (long) settings.buyOrderExpiryDays() * MILLIS_PER_DAY;
-        List<Order> buys = database.query(c ->
-                orders.oldestActive(c, OrderSide.BUY, buyCutoff, BOOK_QUERY_LIMIT));
-        for (Order o : buys) {
-            try {
-                database.inTransaction(c -> expireSingle(c, o, now));
-                processed++;
-            } catch (RuntimeException e) {
-                LOGGER.warn("expire BUY {} failed: {}", o.orderId(), e.getMessage());
+        if (settings.buyOrderExpiryDays() > 0) {
+            long buyCutoff = now - (long) settings.buyOrderExpiryDays() * MILLIS_PER_DAY;
+            List<Order> buys = database.query(c ->
+                    orders.oldestActive(c, OrderSide.BUY, buyCutoff, BOOK_QUERY_LIMIT));
+            for (Order o : buys) {
+                if (beginExpiry(o, now) && resumePendingOrder(o.orderId())) {
+                    processed++;
+                }
             }
         }
         return processed;
     }
 
-    private boolean expireSingle(Connection conn, Order order, long now) {
-        Order expired = order.expired(now);
-        if (!orders.applyState(conn, order, expired)) {
+    private boolean beginExpiry(Order order, long now) {
+        return database.inTransaction(conn -> {
+            Order fresh = orders.findById(conn, order.orderId()).orElse(null);
+            if (fresh == null || !fresh.isActive()
+                    || fresh.processingState() != OrderProcessingState.NONE) {
+                return false;
+            }
+            if (!orders.applyState(conn, fresh,
+                    fresh.withProcessingState(OrderProcessingState.EXPIRE, now))) {
+                return false;
+            }
+            operations.insert(conn, operationEntry(OperationType.EXPIRE,
+                            "op:expire:" + order.orderId(), order.orderId(), order.ownerUuid(),
+                            OperationPhase.BEGIN, now)
+                    .operationId("expire-" + order.orderId()).build());
+            return true;
+        });
+    }
+
+    /** Idempotently finish a durable CANCEL/EXPIRE operation; called by recovery too. */
+    public boolean resumePendingOrder(UUID orderId) {
+        Order order = database.query(c -> orders.findById(c, orderId).orElse(null));
+        if (order == null) {
             return false;
         }
-        operations.insert(conn, operationEntry(OperationType.EXPIRE,
-                        "op:expire:" + order.orderId(), order.orderId(), order.ownerUuid(),
-                        OperationPhase.COMPLETE, now)
-                .operationId("expire-" + order.orderId()).build());
-        if (order.side() == OrderSide.SELL && order.remainingQuantity() > 0) {
-            insertClaimableDeliveries(conn, order.ownerUuid(), "expire-order-" + order.orderId(),
-                    DeliveryType.CANCELLED_RETURN, order.item(), order.remainingQuantity(), now);
+        OrderProcessingState action = order.processingState();
+        if (action != OrderProcessingState.CANCEL && action != OrderProcessingState.EXPIRE) {
+            return action == OrderProcessingState.NONE;
         }
         if (order.side() == OrderSide.BUY && order.escrowReference() != null
                 && !order.escrowReference().isBlank()) {
+            String verb = action == OrderProcessingState.CANCEL ? "cancel" : "expire";
             EconomyGateway.ReleaseResult rel = economy.release(order.escrowReference(),
-                    "expire buy " + order.orderId(), "va:expire:" + order.orderId());
+                    verb + " buy " + orderId, "va:" + verb + ":" + orderId);
             if (!rel.isSuccessOrIdempotent()) {
-                throw new DatabaseException("release при expire " + order.orderId()
-                        + " завершился " + rel.status());
+                LOGGER.warn("{} release pending for {}: {}", verb, orderId, rel.status());
+                return false;
             }
         }
-        completeOp(conn, "expire-" + order.orderId());
-        return true;
+        return database.inTransaction(conn -> {
+            Order fresh = orders.findById(conn, orderId).orElse(null);
+            if (fresh == null || fresh.processingState() != action) {
+                return fresh != null && fresh.processingState() == OrderProcessingState.NONE;
+            }
+            Order terminal = action == OrderProcessingState.CANCEL
+                    ? fresh.cancelled(now()) : fresh.expired(now());
+            if (!orders.applyState(conn, fresh, terminal)) {
+                return false;
+            }
+            String opId = action == OrderProcessingState.CANCEL
+                    ? "cancel-order-" + orderId : "expire-" + orderId;
+            if (fresh.side() == OrderSide.SELL && fresh.remainingQuantity() > 0) {
+                insertClaimableDeliveries(conn, fresh.ownerUuid(), opId,
+                        action == OrderProcessingState.CANCEL
+                                ? DeliveryType.CANCELLED_RETURN : DeliveryType.EXPIRED_RETURN,
+                        fresh.item(), fresh.remainingQuantity(), now());
+            }
+            completeOp(conn, opId);
+            return true;
+        });
     }
 
     // ================================================================ сводки

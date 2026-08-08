@@ -5,6 +5,7 @@ import com.valorcraft.vauction.domain.delivery.AuctionDelivery;
 import com.valorcraft.vauction.domain.delivery.DeliveryState;
 import com.valorcraft.vauction.domain.order.Order;
 import com.valorcraft.vauction.domain.order.OrderSide;
+import com.valorcraft.vauction.domain.order.OrderProcessingState;
 import com.valorcraft.vauction.domain.trade.Trade;
 import com.valorcraft.vauction.domain.trade.TradeState;
 import com.valorcraft.vauction.economy.EconomyGateway;
@@ -82,14 +83,24 @@ public final class RecoveryService {
             for (Trade t : pendingTrades) {
                 if (auction.resumeFill(t)) {
                     fillsFinished++;
-                } else {
-                    manualReviews++;
-                    auction.forceOrderManualReview(t.buyOrderId(),
-                            "не удалось досовершить fill " + t.tradeId());
                 }
             }
 
-            // 2. обеспечение активных BUY-заявок
+            // 2. Durable cancel/expiry sagas and ambiguous inventory mutations.
+            for (Order order : database.query(conn -> orders.listProcessing(conn, MAX_ACTIVE_ORDERS))) {
+                if (order.processingState() == OrderProcessingState.CANCEL
+                        || order.processingState() == OrderProcessingState.EXPIRE) {
+                    if (auction.resumePendingOrder(order.orderId())) {
+                        fillsFinished++;
+                    }
+                } else if (order.processingState() == OrderProcessingState.ITEM_LOCK) {
+                    auction.forceOrderManualReview(order.orderId(),
+                            "indeterminate SELL inventory lock after restart");
+                    manualReviews++;
+                }
+            }
+
+            // 3. обеспечение активных BUY-заявок
             for (Order order : database.query(conn -> orders.listActive(conn, MAX_ACTIVE_ORDERS))) {
                 if (order.side() != OrderSide.BUY) {
                     continue;
@@ -102,7 +113,7 @@ public final class RecoveryService {
                 }
             }
 
-            // 3. зависшие попытки выдачи: fail closed, без автоматического дюпа
+            // 4. зависшие попытки выдачи: fail closed, без автоматического дюпа
             for (AuctionDelivery d : database.query(conn ->
                     deliveries.listByState(conn, DeliveryState.CLAIMING))) {
                 if (auction.quarantineClaim(d.deliveryId())) {

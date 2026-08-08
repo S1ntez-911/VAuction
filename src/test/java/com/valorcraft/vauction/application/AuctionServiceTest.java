@@ -4,6 +4,7 @@ import com.valorcraft.vauction.config.AuctionSettings;
 import com.valorcraft.vauction.domain.delivery.AuctionDelivery;
 import com.valorcraft.vauction.domain.delivery.DeliveryState;
 import com.valorcraft.vauction.domain.order.Order;
+import com.valorcraft.vauction.domain.order.OrderProcessingState;
 import com.valorcraft.vauction.domain.order.OrderStatus;
 import com.valorcraft.vauction.domain.trade.TradeState;
 import com.valorcraft.vauction.economy.EconomyGateway;
@@ -165,7 +166,7 @@ class AuctionServiceTest {
     }
 
     @Test
-    void relockFailureFinalizesPaidFillButQuarantinesUnbackedRemainder() {
+    void rolloverDoesNotDependOnASecondReserveCall() {
         UUID buyer = UUID.randomUUID();
         economy.balances.put(buyer, 10_000L);
         ItemStack item = new ItemStack(Items.COPPER_INGOT, 1);
@@ -177,8 +178,10 @@ class AuctionServiceTest {
         assertEquals(1, outcome.trades().size());
         assertEquals(TradeState.SETTLED, outcome.trades().get(0).state());
         Order buy = db.query(c -> orders.findById(c, outcome.order().orderId())).orElseThrow();
-        assertEquals(OrderStatus.MANUAL_REVIEW, buy.status());
+        assertEquals(OrderStatus.ACTIVE, buy.status());
         assertEquals(5, buy.remainingQuantity());
+        assertEquals(1, buy.refEpoch());
+        assertEquals(50L, economy.reservedAmount(buy.escrowReference()));
         assertEquals(1, db.query(c ->
                 deliveries.listByState(c, DeliveryState.CLAIMABLE)).size());
     }
@@ -332,6 +335,101 @@ class AuctionServiceTest {
         assertTrue(db.query(c -> orders.listActive(c, 10)).isEmpty());
     }
 
+    @Test
+    void sellSnapshotIsCanonicalUnitWhileQuantityStaysOnOrder() {
+        ItemStack stack = new ItemStack(Items.COPPER_INGOT, 32);
+        AuctionService.Outcome outcome = service.createSellOrder(UUID.randomUUID(), stack, 7, 32);
+
+        assertTrue(outcome.isSuccess());
+        Order stored = db.query(c -> orders.findById(c, outcome.order().orderId())).orElseThrow();
+        assertEquals(1, stored.item().quantity());
+        assertEquals(32, stored.originalQuantity());
+        assertEquals(32, stored.remainingQuantity());
+    }
+
+    @Test
+    void pendingTradeDoesNotAffectLastTradePrice() {
+        UUID buyer = UUID.randomUUID();
+        economy.balances.put(buyer, 1_000L);
+        economy.failSettle = true;
+        ItemStack item = new ItemStack(Items.COPPER_INGOT, 1);
+        service.createSellOrder(UUID.randomUUID(), item, 10, 1);
+        service.createBuyOrder(buyer, item, 10, 1);
+
+        assertEquals(0L, service.lastTradePrice(item));
+        economy.failSettle = false;
+        assertEquals(1, new RecoveryService(db, orders, trades, deliveries, economy, service)
+                .scan().fillsFinished());
+        assertEquals(10L, service.lastTradePrice(item));
+    }
+
+    @Test
+    void recoveryFinalizesCapturedOldAndReservedNextEpoch() {
+        UUID buyer = UUID.randomUUID();
+        UUID seller = UUID.randomUUID();
+        economy.balances.put(buyer, 1_000L);
+        economy.captureButReportFailureOnce = true;
+        ItemStack item = new ItemStack(Items.COPPER_INGOT, 1);
+        service.createSellOrder(seller, item, 10, 5);
+        AuctionService.Outcome created = service.createBuyOrder(buyer, item, 10, 10);
+        UUID buyId = created.order().orderId();
+        Order pending = db.query(c -> orders.findById(c, buyId)).orElseThrow();
+        long paid = economy.getBalance(seller);
+
+        assertEquals(OrderProcessingState.FILL, pending.processingState());
+        assertEquals(50L, economy.reservedAmount("vauction:buy:" + buyId + ":1"));
+        RecoveryService recovery = new RecoveryService(db, orders, trades, deliveries, economy, service);
+        assertEquals(1, recovery.scan().fillsFinished());
+
+        Order active = db.query(c -> orders.findById(c, buyId)).orElseThrow();
+        assertEquals(OrderStatus.ACTIVE, active.status());
+        assertEquals(OrderProcessingState.NONE, active.processingState());
+        assertEquals(1, active.refEpoch());
+        assertEquals(paid, economy.getBalance(seller));
+    }
+
+    @Test
+    void failedCancelReleaseRemainsDurableAndRecoveryFinishesIt() {
+        UUID buyer = UUID.randomUUID();
+        economy.balances.put(buyer, 1_000L);
+        ItemStack item = new ItemStack(Items.COPPER_INGOT, 1);
+        AuctionService.Outcome created = service.createBuyOrder(buyer, item, 10, 10);
+        economy.failRelease = true;
+
+        assertEquals(AuctionService.Result.ECONOMY_FAILED,
+                service.cancel(buyer, created.order().orderId(), "test").status());
+        Order pending = db.query(c -> orders.findById(c, created.order().orderId())).orElseThrow();
+        assertEquals(OrderProcessingState.CANCEL, pending.processingState());
+
+        economy.failRelease = false;
+        new RecoveryService(db, orders, trades, deliveries, economy, service).scan();
+        Order cancelled = db.query(c -> orders.findById(c, created.order().orderId())).orElseThrow();
+        assertEquals(OrderStatus.CANCELLED, cancelled.status());
+        assertEquals(1_000L, economy.getBalance(buyer));
+    }
+
+    @Test
+    void zeroExpiryDaysMeansInfiniteLifetime() {
+        AuctionSettings d = AuctionSettings.defaults();
+        AuctionSettings infinite = new AuctionSettings(
+                d.enabled(), d.listingDurationHours(), d.maxActiveListingsPerPlayer(),
+                d.maxBuyOrdersPerPlayer(), d.listingFeeMinor(), d.commissionBps(),
+                d.expiredRetentionDays(), d.historyRetentionDays(), d.allowSelfPurchase(),
+                d.allowContainersWithContents(), d.blockCustomNbt(), d.allowEnchantedBooks(),
+                d.maxCompressedItemBytes(), d.maxUncompressedItemBytes(), 0, 0,
+                d.itemPolicyMode(), d.blockedItems(), d.blockedTags(),
+                d.whitelistedItems(), d.whitelistedTags());
+        ItemStackCodec codec = new ItemStackCodec(262_144, 2_097_152);
+        service = new AuctionService(db, orders, trades, new OperationRepository(), deliveries,
+                codec, new ExactItemMarketKeyStrategy(codec), economy, inventory, infinite);
+        AuctionService.Outcome sell = service.createSellOrder(UUID.randomUUID(),
+                new ItemStack(Items.COPPER_INGOT, 1), 10, 1);
+
+        assertEquals(0, service.expirePass(Long.MAX_VALUE));
+        assertEquals(OrderStatus.ACTIVE,
+                db.query(c -> orders.findById(c, sell.order().orderId())).orElseThrow().status());
+    }
+
     private static final class FakeInventory implements InventoryOps {
         int given;
 
@@ -361,6 +459,7 @@ class AuctionServiceTest {
         int reserveCalls;
         int failReserveAfterCalls = Integer.MAX_VALUE;
         boolean failSettle;
+        boolean failRelease;
         boolean captureButReportFailureOnce;
 
         long reservedAmount(String ref) {
@@ -427,7 +526,51 @@ class AuctionServiceTest {
         }
 
         @Override
+        public synchronized SettleResult settleAndRollover(String oldReferenceId, List<Credit> credits,
+                                                            String nextReferenceId, long remainderAmount,
+                                                            String reason, String idempotencyKey) {
+            Escrow old = escrows.get(oldReferenceId);
+            if (old == null) {
+                return new SettleResult(SettleStatus.NOT_FOUND, 0, oldReferenceId);
+            }
+            if (old.state == HoldingState.CAPTURED) {
+                if (remainderAmount > 0) {
+                    Escrow next = escrows.get(nextReferenceId);
+                    if (next == null || next.state != HoldingState.RESERVED
+                            || next.amount != remainderAmount || !next.owner.equals(old.owner)) {
+                        return new SettleResult(SettleStatus.CONFLICT, old.amount, oldReferenceId);
+                    }
+                }
+                return new SettleResult(SettleStatus.ALREADY_SETTLED, old.amount, oldReferenceId);
+            }
+            long total = credits.stream().mapToLong(Credit::amount).sum();
+            if (old.state != HoldingState.RESERVED || total + remainderAmount != old.amount
+                    || (remainderAmount > 0) != (nextReferenceId != null && !nextReferenceId.isBlank())
+                    || (nextReferenceId != null && escrows.containsKey(nextReferenceId))) {
+                return new SettleResult(SettleStatus.CONFLICT, old.amount, oldReferenceId);
+            }
+            if (failSettle) {
+                return new SettleResult(SettleStatus.FAILED, old.amount, oldReferenceId);
+            }
+            for (Credit credit : credits) {
+                balances.merge(credit.recipientId(), credit.amount(), Long::sum);
+            }
+            escrows.put(oldReferenceId,
+                    new Escrow(old.owner, old.amount, HoldingState.CAPTURED, List.copyOf(credits)));
+            if (remainderAmount > 0) {
+                escrows.put(nextReferenceId,
+                        new Escrow(old.owner, remainderAmount, HoldingState.RESERVED, List.of()));
+            }
+            if (captureButReportFailureOnce) {
+                captureButReportFailureOnce = false;
+                return new SettleResult(SettleStatus.FAILED, old.amount, oldReferenceId);
+            }
+            return new SettleResult(SettleStatus.SUCCESS, old.amount, oldReferenceId);
+        }
+
+        @Override
         public ReleaseResult release(String referenceId, String reason, String idempotencyKey) {
+            if (failRelease) return new ReleaseResult(ReleaseStatus.FAILED, referenceId);
             Escrow escrow = escrows.get(referenceId);
             if (escrow == null) return new ReleaseResult(ReleaseStatus.NOT_FOUND, referenceId);
             if (escrow.state == HoldingState.RELEASED) {

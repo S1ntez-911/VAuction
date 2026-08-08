@@ -48,6 +48,18 @@ public final class SchemaVerifier {
         if (!missing.isEmpty()) {
             throw new DatabaseException("схема БД неполная, отсутствуют таблицы: " + missing);
         }
+        try (Statement st = connection.createStatement();
+             ResultSet rs = st.executeQuery("PRAGMA table_info(auction_orders)")) {
+            boolean processingState = false;
+            while (rs.next()) {
+                processingState |= "processing_state".equalsIgnoreCase(rs.getString("name"));
+            }
+            if (!processingState) {
+                throw new DatabaseException("схема БД неполная: auction_orders.processing_state отсутствует");
+            }
+        } catch (SQLException e) {
+            throw new DatabaseException("не удалось проверить auction_orders", e);
+        }
         return true;
     }
 }

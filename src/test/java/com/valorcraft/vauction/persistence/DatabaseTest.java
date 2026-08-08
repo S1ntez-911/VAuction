@@ -10,6 +10,7 @@ import com.valorcraft.vauction.domain.operation.OperationPhase;
 import com.valorcraft.vauction.domain.operation.OperationStatus;
 import com.valorcraft.vauction.domain.operation.OperationType;
 import com.valorcraft.vauction.domain.order.Order;
+import com.valorcraft.vauction.domain.order.OrderProcessingState;
 import com.valorcraft.vauction.domain.order.OrderSide;
 import com.valorcraft.vauction.domain.order.OrderStatus;
 import com.valorcraft.vauction.domain.sale.AuctionSale;
@@ -27,6 +28,10 @@ import java.util.LinkedHashSet;
 import java.util.Optional;
 import java.util.Set;
 import java.util.UUID;
+import java.util.List;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.Executors;
+import java.util.concurrent.Future;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
@@ -107,7 +112,7 @@ class DatabaseTest {
             });
 
             MigrationRunner.Result result = source.query(MigrationRunner::run);
-            assertEquals(3, result.schemaVersion());
+            assertEquals(4, result.schemaVersion());
             String phase = source.query(c -> {
                 try (Statement st = c.createStatement();
                      ResultSet rs = st.executeQuery(
@@ -195,6 +200,84 @@ class DatabaseTest {
         Order filled = db.query(c -> repo.findById(c, original.orderId())).orElseThrow();
         assertEquals(OrderStatus.FILLED, filled.status());
         assertEquals(100, filled.filledQuantity());
+    }
+
+    @Test
+    void oneBuyEpochRejectsSecondFillCancelAndExpiryRaces() {
+        OrderRepository repo = new OrderRepository();
+        Order buy = order(OrderSide.BUY, 10, 10, 100);
+        db.inTransaction(c -> {
+            repo.insert(c, buy);
+            return null;
+        });
+
+        assertEquals(Integer.valueOf(5),
+                db.inTransaction(c -> repo.tryConsumeBuyForFill(c, buy, 5, 200)));
+        assertNull(db.inTransaction(c -> repo.tryConsumeBuyForFill(c, buy, 5, 201)),
+                "the same epoch cannot have two in-flight fills");
+        assertEquals(false, db.inTransaction(c -> repo.applyState(c, buy,
+                        buy.withProcessingState(OrderProcessingState.CANCEL, 202))),
+                "cancel must lose after fill acquired the epoch");
+        assertEquals(false, db.inTransaction(c -> repo.applyState(c, buy,
+                        buy.withProcessingState(OrderProcessingState.EXPIRE, 203))),
+                "expiry must lose after fill acquired the epoch");
+
+        Order locked = db.query(c -> repo.findById(c, buy.orderId())).orElseThrow();
+        assertEquals(OrderProcessingState.FILL, locked.processingState());
+        assertEquals(5, locked.remainingQuantity());
+        assertTrue(db.query(c -> repo.bestBuys(c, "exact:key", 1, 10)).isEmpty(),
+                "an in-flight epoch must not be matchable");
+    }
+
+    @Test
+    void terminalIntentWinningRacePreventsFill() {
+        OrderRepository repo = new OrderRepository();
+        Order cancelling = order(OrderSide.BUY, 10, 10, 100);
+        Order expiring = order(OrderSide.BUY, 10, 10, 101);
+        db.inTransaction(c -> {
+            repo.insert(c, cancelling);
+            repo.insert(c, expiring);
+            return null;
+        });
+
+        assertEquals(true, db.inTransaction(c -> repo.applyState(c, cancelling,
+                cancelling.withProcessingState(OrderProcessingState.CANCEL, 200))));
+        assertNull(db.inTransaction(c -> repo.tryConsumeBuyForFill(c, cancelling, 1, 201)));
+        assertEquals(true, db.inTransaction(c -> repo.applyState(c, expiring,
+                expiring.withProcessingState(OrderProcessingState.EXPIRE, 202))));
+        assertNull(db.inTransaction(c -> repo.tryConsumeBuyForFill(c, expiring, 1, 203)));
+    }
+
+    @Test
+    void concurrentFillFillCancelExpiryHasExactlyOneWinner() throws Exception {
+        OrderRepository repo = new OrderRepository();
+        Order buy = order(OrderSide.BUY, 10, 10, 100);
+        db.inTransaction(c -> {
+            repo.insert(c, buy);
+            return null;
+        });
+        CountDownLatch start = new CountDownLatch(1);
+        var pool = Executors.newFixedThreadPool(4);
+        try {
+            List<Future<Boolean>> attempts = List.of(
+                    pool.submit(() -> { start.await(); return db.inTransaction(c ->
+                            repo.tryConsumeBuyForFill(c, buy, 1, 200) != null); }),
+                    pool.submit(() -> { start.await(); return db.inTransaction(c ->
+                            repo.tryConsumeBuyForFill(c, buy, 1, 201) != null); }),
+                    pool.submit(() -> { start.await(); return db.inTransaction(c ->
+                            repo.applyState(c, buy, buy.withProcessingState(OrderProcessingState.CANCEL, 202))); }),
+                    pool.submit(() -> { start.await(); return db.inTransaction(c ->
+                            repo.applyState(c, buy, buy.withProcessingState(OrderProcessingState.EXPIRE, 203))); })
+            );
+            start.countDown();
+            int winners = 0;
+            for (Future<Boolean> attempt : attempts) {
+                if (attempt.get()) winners++;
+            }
+            assertEquals(1, winners);
+        } finally {
+            pool.shutdownNow();
+        }
     }
 
     /* ------------------------------ listings + CAS ------------------------------ */

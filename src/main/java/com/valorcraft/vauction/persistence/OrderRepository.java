@@ -4,6 +4,7 @@ import com.valorcraft.vauction.domain.market.OrderBookLevel;
 import com.valorcraft.vauction.domain.order.Order;
 import com.valorcraft.vauction.domain.order.OrderSide;
 import com.valorcraft.vauction.domain.order.OrderStatus;
+import com.valorcraft.vauction.domain.order.OrderProcessingState;
 import com.valorcraft.vauction.item.ItemSnapshot;
 
 import java.sql.Connection;
@@ -26,14 +27,14 @@ public final class OrderRepository {
     private static final String COLUMNS = "order_id, owner_uuid, side, status, market_key, "
             + "item_blob, item_codec_version, item_hash, item_registry_id, item_display_name, "
             + "item_search_name, item_snapshot_qty, price_per_unit, original_quantity, remaining_quantity, "
-            + "filled_quantity, escrow_reference, ref_epoch, created_at, updated_at, version";
+            + "filled_quantity, escrow_reference, ref_epoch, processing_state, created_at, updated_at, version";
 
     public void insert(Connection c, Order order) {
         String sql = "INSERT INTO auction_orders (order_id, owner_uuid, side, status, market_key, "
                 + "item_blob, item_codec_version, item_hash, item_registry_id, item_display_name, "
                 + "item_search_name, item_snapshot_qty, price_per_unit, original_quantity, remaining_quantity, "
-                + "filled_quantity, escrow_reference, ref_epoch, created_at, updated_at, version) "
-                + "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,0)";
+                + "filled_quantity, escrow_reference, ref_epoch, processing_state, created_at, updated_at, version) "
+                + "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,0)";
         try (PreparedStatement ps = c.prepareStatement(sql)) {
             bindOrder(ps, order);
             ps.executeUpdate();
@@ -74,7 +75,8 @@ public final class OrderRepository {
      */
     public List<Order> bestSells(Connection c, String marketKey, long priceLimit, int limit) {
         String sql = "SELECT " + COLUMNS + " FROM auction_orders "
-                + "WHERE market_key = ? AND side = 'SELL' AND status = 'ACTIVE' AND price_per_unit <= ? "
+                + "WHERE market_key = ? AND side = 'SELL' AND status = 'ACTIVE' "
+                + "AND processing_state = 'NONE' AND price_per_unit <= ? "
                 + "ORDER BY price_per_unit ASC, created_at ASC LIMIT ?";
         try (PreparedStatement ps = c.prepareStatement(sql)) {
             ps.setString(1, marketKey);
@@ -93,7 +95,8 @@ public final class OrderRepository {
      */
     public List<Order> bestBuys(Connection c, String marketKey, long priceFloor, int limit) {
         String sql = "SELECT " + COLUMNS + " FROM auction_orders "
-                + "WHERE market_key = ? AND side = 'BUY' AND status = 'ACTIVE' AND price_per_unit >= ? "
+                + "WHERE market_key = ? AND side = 'BUY' AND status = 'ACTIVE' "
+                + "AND processing_state = 'NONE' AND price_per_unit >= ? "
                 + "ORDER BY price_per_unit DESC, created_at ASC LIMIT ?";
         try (PreparedStatement ps = c.prepareStatement(sql)) {
             ps.setString(1, marketKey);
@@ -118,7 +121,7 @@ public final class OrderRepository {
             throw new IllegalArgumentException("orderId mismatch");
         }
         String sql = "UPDATE auction_orders SET status = ?, remaining_quantity = ?, "
-                + "filled_quantity = ?, escrow_reference = ?, ref_epoch = ?, updated_at = ?, "
+                + "filled_quantity = ?, escrow_reference = ?, ref_epoch = ?, processing_state = ?, updated_at = ?, "
                 + "version = version + 1 WHERE order_id = ? AND version = ?";
         try (PreparedStatement ps = c.prepareStatement(sql)) {
             ps.setString(1, updated.status().name());
@@ -126,9 +129,10 @@ public final class OrderRepository {
             ps.setInt(3, updated.filledQuantity());
             ps.setString(4, updated.escrowReference());
             ps.setInt(5, updated.refEpoch());
-            ps.setLong(6, updated.updatedAt());
-            ps.setString(7, expected.orderId().toString());
-            ps.setInt(8, expected.version());
+            ps.setString(6, updated.processingState().name());
+            ps.setLong(7, updated.updatedAt());
+            ps.setString(8, expected.orderId().toString());
+            ps.setInt(9, expected.version());
             return ps.executeUpdate() == 1;
         } catch (SQLException e) {
             throw new DatabaseException("update auction_order failed: " + expected.orderId(), e);
@@ -150,7 +154,7 @@ public final class OrderRepository {
                 + "    status = CASE WHEN remaining_quantity - ? <= 0 THEN 'FILLED' ELSE 'ACTIVE' END, "
                 + "    updated_at = ?, version = version + 1 "
                 + "WHERE order_id = ? AND status = 'ACTIVE'"
-                + "  AND version = ? AND remaining_quantity >= ?";
+                + "  AND processing_state = 'NONE' AND version = ? AND remaining_quantity >= ?";
         try (PreparedStatement ps = c.prepareStatement(sql)) {
             ps.setInt(1, done);
             ps.setInt(2, done);
@@ -167,12 +171,35 @@ public final class OrderRepository {
         }
     }
 
+    /** Consume a BUY epoch and atomically acquire its unique in-flight fill lock. */
+    public Integer tryConsumeBuyForFill(Connection c, Order expected, int done, long now) {
+        if (expected.side() != OrderSide.BUY || done <= 0) {
+            throw new IllegalArgumentException("active BUY and done > 0 required");
+        }
+        String sql = "UPDATE auction_orders SET remaining_quantity = remaining_quantity - ?, "
+                + "filled_quantity = filled_quantity + ?, processing_state = 'FILL', "
+                + "updated_at = ?, version = version + 1 "
+                + "WHERE order_id = ? AND status = 'ACTIVE' AND processing_state = 'NONE' "
+                + "AND version = ? AND remaining_quantity >= ?";
+        try (PreparedStatement ps = c.prepareStatement(sql)) {
+            ps.setInt(1, done);
+            ps.setInt(2, done);
+            ps.setLong(3, now);
+            ps.setString(4, expected.orderId().toString());
+            ps.setInt(5, expected.version());
+            ps.setInt(6, done);
+            return ps.executeUpdate() == 1 ? expected.remainingQuantity() - done : null;
+        } catch (SQLException e) {
+            throw new DatabaseException("lock BUY fill failed: " + expected.orderId(), e);
+        }
+    }
+
     // ------------------------------------------------------------ order book
 
     /** Уровни стакана по стороне (GROUP BY цена → суммарный остаток). */
     public List<OrderBookLevel> bookLevels(Connection c, String marketKey, OrderSide side) {
         String sql = "SELECT price_per_unit, SUM(remaining_quantity) AS qty FROM auction_orders "
-                + "WHERE market_key = ? AND side = ? AND status = 'ACTIVE' "
+                + "WHERE market_key = ? AND side = ? AND status = 'ACTIVE' AND processing_state = 'NONE' "
                 + "GROUP BY price_per_unit ORDER BY price_per_unit "
                 + (side == OrderSide.BUY ? "DESC" : "ASC");
         try (PreparedStatement ps = c.prepareStatement(sql)) {
@@ -193,7 +220,7 @@ public final class OrderRepository {
     /** Лучшая (минимальная) встречная SELL-цена, или 0, если нет. */
     public long bestPrice(Connection c, String marketKey, OrderSide side) {
         String sql = "SELECT price_per_unit FROM auction_orders "
-                + "WHERE market_key = ? AND side = ? AND status = 'ACTIVE' "
+                + "WHERE market_key = ? AND side = ? AND status = 'ACTIVE' AND processing_state = 'NONE' "
                 + "ORDER BY price_per_unit " + (side == OrderSide.SELL ? "ASC" : "DESC") + " LIMIT 1";
         try (PreparedStatement ps = c.prepareStatement(sql)) {
             ps.setString(1, marketKey);
@@ -209,7 +236,7 @@ public final class OrderRepository {
     /** Суммарный остаток по стороне (единицы), или 0. */
     public long totalRemaining(Connection c, String marketKey, OrderSide side) {
         String sql = "SELECT COALESCE(SUM(remaining_quantity), 0) FROM auction_orders "
-                + "WHERE market_key = ? AND side = ? AND status = 'ACTIVE'";
+                + "WHERE market_key = ? AND side = ? AND status = 'ACTIVE' AND processing_state = 'NONE'";
         try (PreparedStatement ps = c.prepareStatement(sql)) {
             ps.setString(1, marketKey);
             ps.setString(2, side.name());
@@ -224,7 +251,7 @@ public final class OrderRepository {
     /** Старейшие активные ордера стороны с created_at <= среза (для expiry). */
     public List<Order> oldestActive(Connection c, OrderSide side, long createdBefore, int limit) {
         String sql = "SELECT " + COLUMNS + " FROM auction_orders "
-                + "WHERE side = ? AND status = 'ACTIVE' AND created_at <= ? "
+                + "WHERE side = ? AND status = 'ACTIVE' AND processing_state = 'NONE' AND created_at <= ? "
                 + "ORDER BY created_at ASC LIMIT ?";
         try (PreparedStatement ps = c.prepareStatement(sql)) {
             ps.setString(1, side.name());
@@ -241,7 +268,7 @@ public final class OrderRepository {
     /** Все активные ордера (для recovery-обеспечения escrow). */
     public List<Order> listActive(Connection c, int limit) {
         String sql = "SELECT " + COLUMNS + " FROM auction_orders "
-                + "WHERE status = 'ACTIVE' ORDER BY created_at LIMIT ?";
+                + "WHERE status = 'ACTIVE' AND processing_state = 'NONE' ORDER BY created_at LIMIT ?";
         try (PreparedStatement ps = c.prepareStatement(sql)) {
             ps.setInt(1, limit);
             try (ResultSet rs = ps.executeQuery()) {
@@ -249,6 +276,19 @@ public final class OrderRepository {
             }
         } catch (SQLException e) {
             throw new DatabaseException("active orders list failed", e);
+        }
+    }
+
+    public List<Order> listProcessing(Connection c, int limit) {
+        String sql = "SELECT " + COLUMNS + " FROM auction_orders WHERE processing_state <> 'NONE' "
+                + "ORDER BY updated_at LIMIT ?";
+        try (PreparedStatement ps = c.prepareStatement(sql)) {
+            ps.setInt(1, limit);
+            try (ResultSet rs = ps.executeQuery()) {
+                return mapAll(rs);
+            }
+        } catch (SQLException e) {
+            throw new DatabaseException("processing orders list failed", e);
         }
     }
 
@@ -281,8 +321,9 @@ public final class OrderRepository {
         ps.setInt(16, o.filledQuantity());
         ps.setString(17, o.escrowReference());
         ps.setInt(18, o.refEpoch());
-        ps.setLong(19, o.createdAt());
-        ps.setLong(20, o.updatedAt());
+        ps.setString(19, o.processingState().name());
+        ps.setLong(20, o.createdAt());
+        ps.setLong(21, o.updatedAt());
     }
 
     private static Order map(ResultSet rs) throws SQLException {
@@ -308,6 +349,7 @@ public final class OrderRepository {
                 rs.getInt("filled_quantity"),
                 escrow,
                 rs.getInt("ref_epoch"),
+                OrderProcessingState.valueOf(rs.getString("processing_state")),
                 rs.getLong("created_at"),
                 rs.getLong("updated_at"),
                 rs.getInt("version"));

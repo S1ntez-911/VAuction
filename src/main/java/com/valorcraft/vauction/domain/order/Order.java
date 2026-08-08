@@ -30,6 +30,7 @@ public record Order(
         int filledQuantity,
         String escrowReference,
         int refEpoch,
+        OrderProcessingState processingState,
         long createdAt,
         long updatedAt,
         int version
@@ -40,6 +41,7 @@ public record Order(
         Objects.requireNonNull(ownerUuid, "ownerUuid");
         Objects.requireNonNull(side, "side");
         Objects.requireNonNull(status, "status");
+        Objects.requireNonNull(processingState, "processingState");
         Objects.requireNonNull(marketKey, "marketKey");
         Objects.requireNonNull(item, "item");
         if (pricePerUnit <= 0) {
@@ -89,7 +91,7 @@ public record Order(
         return new Order(orderId, ownerUuid, side,
                 newRemaining == 0 ? OrderStatus.FILLED : OrderStatus.ACTIVE,
                 marketKey, item, pricePerUnit, originalQuantity, newRemaining, newFilled,
-                escrowReference, refEpoch, createdAt, now, version);
+                escrowReference, refEpoch, processingState, createdAt, now, version);
     }
 
     /** Сменить эпоху escrow (после settlement старой эпохи). */
@@ -99,7 +101,7 @@ public record Order(
         }
         return new Order(orderId, ownerUuid, side, status, marketKey, item, pricePerUnit,
                 originalQuantity, remainingQuantity, filledQuantity, newReference,
-                nextEpoch, createdAt, now, version);
+                nextEpoch, processingState, createdAt, now, version);
     }
 
     /**
@@ -115,28 +117,45 @@ public record Order(
                 ? OrderStatus.ACTIVE : status;
         return new Order(orderId, ownerUuid, side, restored, marketKey, item, pricePerUnit,
                 originalQuantity, remainingQuantity + done, filledQuantity - done,
-                escrowReference, refEpoch, createdAt, now, version);
+                escrowReference, refEpoch, processingState, createdAt, now, version);
     }
 
     /** Деактивация ордера (отмена). Состояние эскроу не трогает (это слой сервиса). */
     public Order cancelled(long now) {
         return new Order(orderId, ownerUuid, side, OrderStatus.CANCELLED, marketKey, item,
                 pricePerUnit, originalQuantity, remainingQuantity, filledQuantity,
-                escrowReference, refEpoch, createdAt, now, version);
+                escrowReference, refEpoch, OrderProcessingState.NONE, createdAt, now, version);
     }
 
     /** Перевод в ручное ревью (не торгуется, данные не теряются). */
     public Order toManualReview(long now) {
         return new Order(orderId, ownerUuid, side, OrderStatus.MANUAL_REVIEW, marketKey, item,
                 pricePerUnit, originalQuantity, remainingQuantity, filledQuantity,
-                escrowReference, refEpoch, createdAt, now, version);
+                escrowReference, refEpoch, OrderProcessingState.NONE, createdAt, now, version);
     }
 
     /** Экспирация (снимается с книги, отдача остатка — слой сервиса). */
     public Order expired(long now) {
         return new Order(orderId, ownerUuid, side, OrderStatus.EXPIRED, marketKey, item,
                 pricePerUnit, originalQuantity, remainingQuantity, filledQuantity,
-                escrowReference, refEpoch, createdAt, now, version);
+                escrowReference, refEpoch, OrderProcessingState.NONE, createdAt, now, version);
+
+    }
+
+    /** Acquire or release the durable per-order processing lock. */
+    public Order withProcessingState(OrderProcessingState next, long now) {
+        return new Order(orderId, ownerUuid, side, status, marketKey, item, pricePerUnit,
+                originalQuantity, remainingQuantity, filledQuantity, escrowReference, refEpoch,
+                next, createdAt, now, version);
+    }
+
+    /** Final state of a BUY after its atomic settlement/rollover completed. */
+    public Order finalizeFill(int nextEpoch, String nextReference, long now) {
+        OrderStatus finalStatus = remainingQuantity == 0 ? OrderStatus.FILLED : OrderStatus.ACTIVE;
+        return new Order(orderId, ownerUuid, side, finalStatus, marketKey, item, pricePerUnit,
+                originalQuantity, remainingQuantity, filledQuantity, nextReference,
+                remainingQuantity == 0 ? refEpoch : nextEpoch, OrderProcessingState.NONE,
+                createdAt, now, version);
     }
 
     /** Builder для нового ордера (orderId ещё неизвестен). */
@@ -157,6 +176,7 @@ public record Order(
         private int refEpoch;
         private String escrowReference;
         private int filledQuantity;
+        private OrderProcessingState processingState = OrderProcessingState.NONE;
 
         private Builder(UUID ownerUuid, OrderSide side, String marketKey, ItemSnapshot item,
                         long pricePerUnit, int quantity, long createdAt) {
@@ -190,10 +210,15 @@ public record Order(
             return this;
         }
 
+        public Builder processingState(OrderProcessingState state) {
+            this.processingState = Objects.requireNonNull(state, "state");
+            return this;
+        }
+
         public Order build() {
             return new Order(orderId, ownerUuid, side, OrderStatus.ACTIVE, marketKey, item,
                     pricePerUnit, quantity, quantity - filledQuantity, filledQuantity,
-                    escrowReference, refEpoch, createdAt, createdAt, 0);
+                    escrowReference, refEpoch, processingState, createdAt, createdAt, 0);
         }
     }
 }

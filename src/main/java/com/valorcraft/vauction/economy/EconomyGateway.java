@@ -45,6 +45,11 @@ public interface EconomyGateway {
     SettleResult settle(String referenceId, List<Credit> credits,
                         String reason, String idempotencyKey);
 
+    /** Settle an old escrow and create the next BUY epoch in one economy transaction. */
+    SettleResult settleAndRollover(String oldReferenceId, List<Credit> credits,
+                                   String nextReferenceId, long remainderAmount,
+                                   String reason, String idempotencyKey);
+
     /** Вернуть зарезервированные средства владельцу (идемпотентно). */
     ReleaseResult release(String referenceId, String reason, String idempotencyKey);
 

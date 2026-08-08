@@ -120,6 +120,30 @@ public final class VEconomyGateway implements EconomyGateway {
     }
 
     @Override
+    public SettleResult settleAndRollover(String oldReferenceId, List<Credit> credits,
+                                          String nextReferenceId, long remainderAmount,
+                                          String reason, String idempotencyKey) {
+        if (!isAvailable()) {
+            return new SettleResult(SettleStatus.FAILED, 0L, oldReferenceId);
+        }
+        List<EscrowCredit> veCredits = new ArrayList<>(credits.size());
+        for (Credit c : credits) {
+            veCredits.add(new EscrowCredit(c.recipientId(), c.amount(), c.role()));
+        }
+        EscrowResult r = EconomyCore.escrow().settleAndRollover(oldReferenceId, veCredits,
+                nextReferenceId, remainderAmount,
+                ctx(TransactionType.ESCROW_ROLLOVER, reason, idempotencyKey));
+        return switch (r.status()) {
+            case SUCCESS -> new SettleResult(SettleStatus.SUCCESS, r.reservedAmount(), oldReferenceId);
+            case ALREADY_SETTLED -> new SettleResult(SettleStatus.ALREADY_SETTLED, r.reservedAmount(), oldReferenceId);
+            case NOT_FOUND -> new SettleResult(SettleStatus.NOT_FOUND, r.reservedAmount(), oldReferenceId);
+            case CONFLICT, WRONG_STATE, INVALID_CREDITS, INVALID_AMOUNT, DUPLICATE, LIMIT_EXCEEDED,
+                    ACCOUNT_DISABLED, INSUFFICIENT_FUNDS, ALREADY_RESERVED, ALREADY_RELEASED, DATABASE_ERROR
+                    -> new SettleResult(SettleStatus.CONFLICT, r.reservedAmount(), oldReferenceId);
+        };
+    }
+
+    @Override
     public ReleaseResult release(String referenceId, String reason, String idempotencyKey) {
         if (!isAvailable()) {
             return new ReleaseResult(ReleaseStatus.FAILED, referenceId);
