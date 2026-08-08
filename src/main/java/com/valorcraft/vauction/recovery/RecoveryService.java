@@ -47,7 +47,7 @@ public final class RecoveryService {
     private final EconomyGateway economy;
     private final AuctionService auction;
 
-    private enum BackingResult { OK, RESTORED, MANUAL_REVIEW }
+    private enum BackingResult { OK, RESTORED, RETRY, MANUAL_REVIEW }
 
     public RecoveryService(DatabaseManager database, OrderRepository orders, TradeRepository trades,
                            DeliveryRepository deliveries, EconomyGateway economy,
@@ -92,6 +92,16 @@ public final class RecoveryService {
                         || order.processingState() == OrderProcessingState.EXPIRE) {
                     if (auction.resumePendingOrder(order.orderId())) {
                         fillsFinished++;
+                    }
+                } else if (order.processingState() == OrderProcessingState.RESERVE) {
+                    BackingResult result = ensureEscrowBacking(order);
+                    if ((result == BackingResult.OK || result == BackingResult.RESTORED)
+                            && auction.activateReservedBuy(order.orderId()) != null) {
+                        if (result == BackingResult.RESTORED) {
+                            escrowsRestored++;
+                        }
+                    } else if (result == BackingResult.MANUAL_REVIEW) {
+                        manualReviews++;
                     }
                 } else if (order.processingState() == OrderProcessingState.ITEM_LOCK) {
                     auction.forceOrderManualReview(order.orderId(),
@@ -163,7 +173,12 @@ public final class RecoveryService {
                             + holding.state() + " amount=" + holding.amount() + " need=" + need);
             return BackingResult.MANUAL_REVIEW;
         }
-        if (current.status() == EconomyGateway.LookupStatus.FAILED) {
+        if (current.status() == EconomyGateway.LookupStatus.TRANSIENT_FAILURE
+                || current.status() == EconomyGateway.LookupStatus.FAILED) {
+            LOGGER.warn("Временная ошибка чтения escrow {}; повтор будет выполнен позже", ref);
+            return BackingResult.RETRY;
+        }
+        if (current.status() != EconomyGateway.LookupStatus.NOT_FOUND) {
             auction.forceOrderManualReview(order.orderId(), "ошибка чтения escrow " + ref);
             return BackingResult.MANUAL_REVIEW;
         }
@@ -178,6 +193,12 @@ public final class RecoveryService {
             auction.forceOrderManualReview(order.orderId(),
                     "недостаточно средств для восстановления escrow " + ref);
             return BackingResult.MANUAL_REVIEW;
+        }
+        if (rr.status() == EconomyGateway.ReserveStatus.TRANSIENT_FAILURE
+                || rr.status() == EconomyGateway.ReserveStatus.FAILED) {
+            LOGGER.warn("Временная ошибка восстановления escrow {}; повтор будет выполнен позже: {}",
+                    ref, rr.status());
+            return BackingResult.RETRY;
         }
         LOGGER.warn("Восстановление escrow {} не удалось: {}", ref, rr.status());
         auction.forceOrderManualReview(order.orderId(), "escrow " + rr.status() + ": " + ref);

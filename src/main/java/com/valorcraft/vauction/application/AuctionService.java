@@ -236,6 +236,7 @@ public final class AuctionService {
                     .orderId(orderId)
                     .refEpoch(0)
                     .escrowReference(ref0)
+                    .processingState(OrderProcessingState.RESERVE)
                     .build();
             order = created;
             database.inTransaction(conn -> {
@@ -256,11 +257,20 @@ public final class AuctionService {
                 "buy hold " + orderId, "va:buy:" + orderId);
         if (!r0.isSuccessOrIdempotent()) {
             LOGGER.warn("reserve on buy creation failed {}: {}", ref0, r0.status());
-            markCreateBuyFailed(orderId, r0.status().name());
             if (r0.status() == EconomyGateway.ReserveStatus.INSUFFICIENT_FUNDS) {
+                markCreateBuyFailed(orderId, r0.status().name());
                 return Outcome.fail(Result.INSUFFICIENT_FUNDS, "Недостаточно средств");
             }
+            if (r0.status() == EconomyGateway.ReserveStatus.CONFLICT) {
+                markCreateBuyFailed(orderId, r0.status().name());
+            }
             return Outcome.fail(Result.ECONOMY_FAILED, "Не удалось зарезервировать средства");
+        }
+
+        order = activateReservedBuy(orderId);
+        if (order == null) {
+            return Outcome.fail(Result.DATABASE_FAILED,
+                    "Резерв создан, активация BUY будет завершена recovery");
         }
 
         List<Order> resting = database.query(conn ->
@@ -757,6 +767,27 @@ public final class AuctionService {
             }
             completeOp(conn, opId);
             return true;
+        });
+    }
+
+    /** Publish a BUY only after its durable reserve intent is known to be backed. */
+    public Order activateReservedBuy(UUID orderId) {
+        return database.inTransaction(conn -> {
+            Order fresh = orders.findById(conn, orderId).orElse(null);
+            if (fresh == null) {
+                return null;
+            }
+            if (fresh.processingState() == OrderProcessingState.NONE) {
+                return fresh;
+            }
+            if (fresh.processingState() != OrderProcessingState.RESERVE) {
+                return null;
+            }
+            if (!orders.applyState(conn, fresh,
+                    fresh.withProcessingState(OrderProcessingState.NONE, now()))) {
+                return null;
+            }
+            return orders.findById(conn, orderId).orElse(null);
         });
     }
 

@@ -76,7 +76,9 @@ public interface EconomyGateway {
         }
     }
 
-    enum ReserveStatus { SUCCESS, ALREADY_RESERVED, INSUFFICIENT_FUNDS, CONFLICT, FAILED }
+    enum ReserveStatus {
+        SUCCESS, ALREADY_RESERVED, INSUFFICIENT_FUNDS, CONFLICT, TRANSIENT_FAILURE, FAILED
+    }
 
     record ReserveResult(ReserveStatus status, long reservedAmount, String referenceId) {
         public boolean isSuccessOrIdempotent() {
@@ -84,7 +86,9 @@ public interface EconomyGateway {
         }
     }
 
-    enum SettleStatus { SUCCESS, ALREADY_SETTLED, CONFLICT, NOT_FOUND, FAILED }
+    enum SettleStatus {
+        SUCCESS, ALREADY_SETTLED, CONFLICT, NOT_FOUND, TRANSIENT_FAILURE, FAILED
+    }
 
     record SettleResult(SettleStatus status, long reservedAmount, String referenceId) {
         public boolean isSuccessOrIdempotent() {
@@ -92,7 +96,9 @@ public interface EconomyGateway {
         }
     }
 
-    enum ReleaseStatus { SUCCESS, ALREADY_RELEASED, CONFLICT, NOT_FOUND, FAILED }
+    enum ReleaseStatus {
+        SUCCESS, ALREADY_RELEASED, CONFLICT, NOT_FOUND, TRANSIENT_FAILURE, FAILED
+    }
 
     record ReleaseResult(ReleaseStatus status, String referenceId) {
         public boolean isSuccessOrIdempotent() {
@@ -100,7 +106,7 @@ public interface EconomyGateway {
         }
     }
 
-    enum LookupStatus { FOUND, NOT_FOUND, FAILED }
+    enum LookupStatus { FOUND, NOT_FOUND, TRANSIENT_FAILURE, FAILED }
 
     enum HoldingState { RESERVED, CAPTURED, RELEASED }
 

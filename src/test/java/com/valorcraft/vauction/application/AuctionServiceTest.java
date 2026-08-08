@@ -336,6 +336,45 @@ class AuctionServiceTest {
     }
 
     @Test
+    void transientInitialReserveLeavesDurableNonTradableIntentForRecovery() {
+        UUID buyer = UUID.randomUUID();
+        economy.balances.put(buyer, 1_000L);
+        economy.transientReserveFailures = 1;
+        ItemStack item = new ItemStack(Items.COPPER_INGOT, 1);
+
+        AuctionService.Outcome outcome = service.createBuyOrder(buyer, item, 10, 10);
+        assertEquals(AuctionService.Result.ECONOMY_FAILED, outcome.status());
+        Order pending = db.query(c -> orders.listProcessing(c, 10)).get(0);
+        assertEquals(OrderProcessingState.RESERVE, pending.processingState());
+        assertTrue(db.query(c -> orders.bestBuys(c, pending.marketKey(), 1, 10)).isEmpty());
+
+        RecoveryService recovery = new RecoveryService(db, orders, trades, deliveries, economy, service);
+        assertEquals(1, recovery.scan().escrowsRestored());
+        Order active = db.query(c -> orders.findById(c, pending.orderId())).orElseThrow();
+        assertEquals(OrderProcessingState.NONE, active.processingState());
+        assertEquals(OrderStatus.ACTIVE, active.status());
+    }
+
+    @Test
+    void transientRolloverFailureStaysRecoverableInsteadOfManualReview() {
+        UUID buyer = UUID.randomUUID();
+        economy.balances.put(buyer, 1_000L);
+        economy.transientSettleFailures = 1;
+        ItemStack item = new ItemStack(Items.COPPER_INGOT, 1);
+        service.createSellOrder(UUID.randomUUID(), item, 10, 5);
+        AuctionService.Outcome buy = service.createBuyOrder(buyer, item, 10, 10);
+        Order pending = db.query(c -> orders.findById(c, buy.order().orderId())).orElseThrow();
+
+        assertEquals(OrderStatus.ACTIVE, pending.status());
+        assertEquals(OrderProcessingState.FILL, pending.processingState());
+        RecoveryService recovery = new RecoveryService(db, orders, trades, deliveries, economy, service);
+        assertEquals(1, recovery.scan().fillsFinished());
+        Order recovered = db.query(c -> orders.findById(c, pending.orderId())).orElseThrow();
+        assertEquals(OrderStatus.ACTIVE, recovered.status());
+        assertEquals(OrderProcessingState.NONE, recovered.processingState());
+    }
+
+    @Test
     void sellSnapshotIsCanonicalUnitWhileQuantityStaysOnOrder() {
         ItemStack stack = new ItemStack(Items.COPPER_INGOT, 32);
         AuctionService.Outcome outcome = service.createSellOrder(UUID.randomUUID(), stack, 7, 32);
@@ -460,6 +499,8 @@ class AuctionServiceTest {
         int failReserveAfterCalls = Integer.MAX_VALUE;
         boolean failSettle;
         boolean failRelease;
+        int transientReserveFailures;
+        int transientSettleFailures;
         boolean captureButReportFailureOnce;
 
         long reservedAmount(String ref) {
@@ -476,6 +517,10 @@ class AuctionServiceTest {
         @Override
         public ReserveResult reserve(UUID ownerId, long amount, String referenceId,
                                      String reason, String idempotencyKey) {
+            if (transientReserveFailures > 0) {
+                transientReserveFailures--;
+                return new ReserveResult(ReserveStatus.TRANSIENT_FAILURE, amount, referenceId);
+            }
             Escrow existing = escrows.get(referenceId);
             if (existing != null) {
                 return existing.owner.equals(ownerId) && existing.amount == amount
@@ -530,6 +575,11 @@ class AuctionServiceTest {
                                                             String nextReferenceId, long remainderAmount,
                                                             String reason, String idempotencyKey) {
             Escrow old = escrows.get(oldReferenceId);
+            if (transientSettleFailures > 0) {
+                transientSettleFailures--;
+                return new SettleResult(SettleStatus.TRANSIENT_FAILURE,
+                        old == null ? 0 : old.amount, oldReferenceId);
+            }
             if (old == null) {
                 return new SettleResult(SettleStatus.NOT_FOUND, 0, oldReferenceId);
             }

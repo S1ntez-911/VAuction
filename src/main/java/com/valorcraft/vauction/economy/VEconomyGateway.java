@@ -83,7 +83,7 @@ public final class VEconomyGateway implements EconomyGateway {
     public ReserveResult reserve(UUID ownerId, long amount, String referenceId,
                                  String reason, String idempotencyKey) {
         if (!isAvailable()) {
-            return new ReserveResult(ReserveStatus.FAILED, amount, referenceId);
+            return new ReserveResult(ReserveStatus.TRANSIENT_FAILURE, amount, referenceId);
         }
         EscrowResult r = EconomyCore.escrow().reserveMoney(ownerId, amount, referenceId,
                 ctx(TransactionType.ESCROW_RESERVE, reason, idempotencyKey));
@@ -91,8 +91,9 @@ public final class VEconomyGateway implements EconomyGateway {
             case SUCCESS -> new ReserveResult(ReserveStatus.SUCCESS, r.reservedAmount(), referenceId);
             case ALREADY_RESERVED -> new ReserveResult(ReserveStatus.ALREADY_RESERVED, r.reservedAmount(), referenceId);
             case INSUFFICIENT_FUNDS -> new ReserveResult(ReserveStatus.INSUFFICIENT_FUNDS, amount, referenceId);
+            case DATABASE_ERROR -> new ReserveResult(ReserveStatus.TRANSIENT_FAILURE, amount, referenceId);
             case CONFLICT, WRONG_STATE, DUPLICATE, INVALID_AMOUNT, LIMIT_EXCEEDED, ACCOUNT_DISABLED,
-                    INVALID_CREDITS, NOT_FOUND, ALREADY_SETTLED, ALREADY_RELEASED, DATABASE_ERROR
+                    INVALID_CREDITS, NOT_FOUND, ALREADY_SETTLED, ALREADY_RELEASED
                     -> new ReserveResult(ReserveStatus.CONFLICT, amount, referenceId);
         };
     }
@@ -101,7 +102,7 @@ public final class VEconomyGateway implements EconomyGateway {
     public SettleResult settle(String referenceId, List<Credit> credits,
                                String reason, String idempotencyKey) {
         if (!isAvailable()) {
-            return new SettleResult(SettleStatus.FAILED, 0L, referenceId);
+            return new SettleResult(SettleStatus.TRANSIENT_FAILURE, 0L, referenceId);
         }
         List<EscrowCredit> veCredits = new ArrayList<>(credits.size());
         for (Credit c : credits) {
@@ -113,8 +114,9 @@ public final class VEconomyGateway implements EconomyGateway {
             case SUCCESS -> new SettleResult(SettleStatus.SUCCESS, r.reservedAmount(), referenceId);
             case ALREADY_SETTLED -> new SettleResult(SettleStatus.ALREADY_SETTLED, r.reservedAmount(), referenceId);
             case NOT_FOUND -> new SettleResult(SettleStatus.NOT_FOUND, r.reservedAmount(), referenceId);
+            case DATABASE_ERROR -> new SettleResult(SettleStatus.TRANSIENT_FAILURE, r.reservedAmount(), referenceId);
             case CONFLICT, WRONG_STATE, INVALID_CREDITS, INVALID_AMOUNT, DUPLICATE, LIMIT_EXCEEDED,
-                    ACCOUNT_DISABLED, INSUFFICIENT_FUNDS, ALREADY_RESERVED, ALREADY_RELEASED, DATABASE_ERROR
+                    ACCOUNT_DISABLED, INSUFFICIENT_FUNDS, ALREADY_RESERVED, ALREADY_RELEASED
                     -> new SettleResult(SettleStatus.CONFLICT, r.reservedAmount(), referenceId);
         };
     }
@@ -124,7 +126,7 @@ public final class VEconomyGateway implements EconomyGateway {
                                           String nextReferenceId, long remainderAmount,
                                           String reason, String idempotencyKey) {
         if (!isAvailable()) {
-            return new SettleResult(SettleStatus.FAILED, 0L, oldReferenceId);
+            return new SettleResult(SettleStatus.TRANSIENT_FAILURE, 0L, oldReferenceId);
         }
         List<EscrowCredit> veCredits = new ArrayList<>(credits.size());
         for (Credit c : credits) {
@@ -137,8 +139,9 @@ public final class VEconomyGateway implements EconomyGateway {
             case SUCCESS -> new SettleResult(SettleStatus.SUCCESS, r.reservedAmount(), oldReferenceId);
             case ALREADY_SETTLED -> new SettleResult(SettleStatus.ALREADY_SETTLED, r.reservedAmount(), oldReferenceId);
             case NOT_FOUND -> new SettleResult(SettleStatus.NOT_FOUND, r.reservedAmount(), oldReferenceId);
+            case DATABASE_ERROR -> new SettleResult(SettleStatus.TRANSIENT_FAILURE, r.reservedAmount(), oldReferenceId);
             case CONFLICT, WRONG_STATE, INVALID_CREDITS, INVALID_AMOUNT, DUPLICATE, LIMIT_EXCEEDED,
-                    ACCOUNT_DISABLED, INSUFFICIENT_FUNDS, ALREADY_RESERVED, ALREADY_RELEASED, DATABASE_ERROR
+                    ACCOUNT_DISABLED, INSUFFICIENT_FUNDS, ALREADY_RESERVED, ALREADY_RELEASED
                     -> new SettleResult(SettleStatus.CONFLICT, r.reservedAmount(), oldReferenceId);
         };
     }
@@ -146,7 +149,7 @@ public final class VEconomyGateway implements EconomyGateway {
     @Override
     public ReleaseResult release(String referenceId, String reason, String idempotencyKey) {
         if (!isAvailable()) {
-            return new ReleaseResult(ReleaseStatus.FAILED, referenceId);
+            return new ReleaseResult(ReleaseStatus.TRANSIENT_FAILURE, referenceId);
         }
         EscrowResult r = EconomyCore.escrow().releaseMoney(referenceId,
                 ctx(TransactionType.ESCROW_RELEASE, reason, idempotencyKey));
@@ -154,8 +157,9 @@ public final class VEconomyGateway implements EconomyGateway {
             case SUCCESS -> new ReleaseResult(ReleaseStatus.SUCCESS, referenceId);
             case ALREADY_RELEASED -> new ReleaseResult(ReleaseStatus.ALREADY_RELEASED, referenceId);
             case NOT_FOUND -> new ReleaseResult(ReleaseStatus.NOT_FOUND, referenceId);
+            case DATABASE_ERROR -> new ReleaseResult(ReleaseStatus.TRANSIENT_FAILURE, referenceId);
             case CONFLICT, WRONG_STATE, INVALID_AMOUNT, INVALID_CREDITS, DUPLICATE, LIMIT_EXCEEDED,
-                    ACCOUNT_DISABLED, INSUFFICIENT_FUNDS, ALREADY_RESERVED, ALREADY_SETTLED, DATABASE_ERROR
+                    ACCOUNT_DISABLED, INSUFFICIENT_FUNDS, ALREADY_RESERVED, ALREADY_SETTLED
                     -> new ReleaseResult(ReleaseStatus.CONFLICT, referenceId);
         };
     }
@@ -163,11 +167,11 @@ public final class VEconomyGateway implements EconomyGateway {
     @Override
     public LookupResult find(String referenceId) {
         if (!isAvailable()) {
-            return LookupResult.failed();
+            return new LookupResult(LookupStatus.TRANSIENT_FAILURE, null);
         }
         EscrowLookupResult r = EconomyCore.escrow().findEscrow(referenceId);
         if (r.status() == EscrowLookupResult.Status.DATABASE_ERROR) {
-            return LookupResult.failed();
+            return new LookupResult(LookupStatus.TRANSIENT_FAILURE, null);
         }
         if (r.status() == EscrowLookupResult.Status.NOT_FOUND || r.snapshotOrNull() == null) {
             return LookupResult.notFound();
