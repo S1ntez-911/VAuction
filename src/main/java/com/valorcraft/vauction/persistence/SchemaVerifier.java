@@ -21,7 +21,9 @@ public final class SchemaVerifier {
             "auction_deliveries",
             "auction_sales",
             "auction_operation_log",
-            "auction_buy_orders"
+            "auction_buy_orders",
+            "auction_orders",
+            "auction_trades"
     );
 
     private SchemaVerifier() {}

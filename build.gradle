@@ -52,8 +52,12 @@ repositories {
 dependencies {
     minecraft "net.minecraftforge:forge:${minecraft_version}-${forge_version}"
 
-    compileOnly fg.deobf(group: 'local', name: 'veconomy', version: '1.0.0')
-    runtimeOnly fg.deobf(group: 'local', name: 'veconomy', version: '1.0.0')
+    // VEconomy: полная сборка невозможна без локальных зависимостей (kubejs и пр.),
+    // поэтому на compile classpath ложится API-снимок HEAD (b3e41fa) + компиляционный
+    // stub EconomyCore — signalатуры совпадают с реальным economy_core.jar,
+    // который подставляется на сервере (mods/). В финальный jar не попадает.
+    compileOnly files('libs/veconomy-api-1.0.0.jar')
+    runtimeOnly files('libs/veconomy-api-1.0.0.jar')
 
     // Собственная БД VAuction: SQLite (по умолчанию). Драйвер упаковывается jarJar'ом.
     implementation('org.xerial:sqlite-jdbc:3.45.3.0') { transitive = false }

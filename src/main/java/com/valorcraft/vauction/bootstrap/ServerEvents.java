@@ -21,7 +21,7 @@ public final class ServerEvents {
     public static void onServerStarted(ServerStartedEvent event) {
         Path worldRoot = event.getServer().getWorldPath(LevelResource.ROOT);
         Path dbPath = worldRoot.resolve("vauction").resolve("auction.db");
-        VAuctionCore.start(dbPath);
+        VAuctionCore.start(dbPath, event.getServer());
     }
 
     @SubscribeEvent
