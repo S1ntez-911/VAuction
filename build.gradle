@@ -4,10 +4,10 @@ plugins {
 }
 
 version = mod_version
-group = 'com.valorcraft.exchange'
+group = 'com.valorcraft.vauction'
 
 base {
-    archivesName = 'ResourceExchange-1.20.1'
+    archivesName = 'VAuction-1.20.1'
 }
 
 java {
@@ -25,7 +25,7 @@ minecraft {
             workingDirectory project.file('run')
             property 'forge.logging.console.level', 'debug'
             mods {
-                resource_exchange {
+                vauction {
                     source sourceSets.main
                 }
             }
@@ -34,7 +34,7 @@ minecraft {
             workingDirectory project.file('run')
             property 'forge.logging.console.level', 'debug'
             mods {
-                resource_exchange {
+                vauction {
                     source sourceSets.main
                 }
             }
@@ -55,8 +55,15 @@ dependencies {
     compileOnly fg.deobf(group: 'local', name: 'veconomy', version: '1.0.0')
     runtimeOnly fg.deobf(group: 'local', name: 'veconomy', version: '1.0.0')
 
+    // Собственная БД VAuction: SQLite (по умолчанию). Драйвер упаковывается jarJar'ом.
+    implementation('org.xerial:sqlite-jdbc:3.45.3.0') { transitive = false }
+    jarJar('org.xerial:sqlite-jdbc:3.45.3.0') {
+        jarJar.ranged(it, '[3.45.3.0,4.0.0)')
+    }
+
     testImplementation 'org.junit.jupiter:junit-jupiter-api:5.10.2'
     testRuntimeOnly 'org.junit.jupiter:junit-jupiter-engine:5.10.2'
+    testRuntimeOnly 'org.junit.platform:junit-platform-launcher:1.10.2'
 }
 
 test {
@@ -82,10 +89,10 @@ jar {
     reproducibleFileOrder = true
     manifest {
         attributes([
-                'Specification-Title'   : 'ResourceExchange',
+                'Specification-Title'   : 'VAuction',
                 'Specification-Version' : project.version,
                 'Specification-Vendor'  : 'ValorCraft',
-                'Implementation-Title'  : 'ResourceExchange',
+                'Implementation-Title'  : 'VAuction',
                 'Implementation-Version': project.jar.archiveVersion,
                 'Implementation-Vendor': 'ValorCraft'
         ])

@@ -1,5 +1,4 @@
 # Локальная среда
-gradle.properties
 .gradle/
 
 # Сборка
