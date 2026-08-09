@@ -2,6 +2,7 @@ package com.valorcraft.vauction.gui;
 
 import com.valorcraft.vauction.domain.order.OrderSide;
 import net.minecraft.world.item.ItemStack;
+import net.minecraft.world.SimpleContainer;
 
 import java.util.HashMap;
 import java.util.Map;
@@ -24,6 +25,8 @@ final class MarketSession {
     int containerId = -1;
     boolean transitioning;
     boolean executing;
+    SimpleContainer contents;
+    ServerChestMenu menu;
 
     MarketSession(UUID playerId) {
         this.playerId = playerId;

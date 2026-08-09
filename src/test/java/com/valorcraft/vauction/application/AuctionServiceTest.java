@@ -80,6 +80,39 @@ class AuctionServiceTest {
     }
 
     @Test
+    void inventorySellUsesExactVariantAcrossSlotsAndDuplicateRequestRemovesOnce() {
+        UUID seller = UUID.randomUUID();
+        UUID requestId = UUID.randomUUID();
+        ItemStack enchanted = new ItemStack(Items.DIAMOND, 1);
+        enchanted.getOrCreateTag().putString("variant", "exact");
+        inventory.available = 17;
+
+        AuctionService.Outcome first = service.createSellOrderFromInventory(
+                seller, enchanted, 50, 17, requestId);
+        AuctionService.Outcome duplicate = service.createSellOrderFromInventory(
+                seller, enchanted, 50, 17, requestId);
+
+        assertTrue(first.isSuccess());
+        assertTrue(duplicate.isSuccess());
+        assertEquals(requestId, first.order().orderId());
+        assertEquals(1, inventory.takeCalls);
+        assertEquals(17, inventory.taken);
+        assertEquals("exact", inventory.lastUnit.getTag().getString("variant"));
+    }
+
+    @Test
+    void insufficientInventorySellDoesNotRemoveAnything() {
+        inventory.available = 3;
+        AuctionService.Outcome outcome = service.createSellOrderFromInventory(
+                UUID.randomUUID(), new ItemStack(Items.IRON_INGOT), 20, 4, UUID.randomUUID());
+
+        assertFalse(outcome.isSuccess());
+        assertEquals(AuctionService.Result.INSUFFICIENT_ITEMS, outcome.status());
+        assertEquals(0, inventory.takeCalls);
+        assertEquals(3, inventory.available);
+    }
+
+    @Test
     void fullyBackedBuyFillsAcrossTwoSellersWithFreshEscrowEpochs() {
         UUID buyer = UUID.randomUUID();
         UUID sellerA = UUID.randomUUID();
@@ -711,15 +744,24 @@ class AuctionServiceTest {
 
     private static final class FakeInventory implements InventoryOps {
         int given;
+        int available = Integer.MAX_VALUE;
+        int takeCalls;
+        int taken;
+        ItemStack lastUnit = ItemStack.EMPTY;
 
         @Override
         public boolean tryTake(UUID playerId, ItemStack unit, int quantity) {
+            takeCalls++;
+            if (quantity > available) return false;
+            available -= quantity;
+            taken += quantity;
+            lastUnit = unit.copy();
             return true;
         }
 
         @Override
         public int availableCount(UUID playerId, ItemStack unit) {
-            return Integer.MAX_VALUE;
+            return available;
         }
 
         @Override

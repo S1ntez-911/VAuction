@@ -183,6 +183,49 @@ public final class AuctionService {
         return placeSell(seller.getUUID(), probe, pricePerUnit, quantity, true, requestId);
     }
 
+    /**
+     * Выставить точный вариант предмета из всего инвентаря игрока. Предметы
+     * списывает только durable ITEM_LOCK-путь внутри {@link #placeSell}.
+     */
+    public Outcome createSellOrderFromInventory(ServerPlayer seller, ItemStack exactUnit,
+                                                long pricePerUnit, int quantity, UUID requestId) {
+        if (seller == null) {
+            return Outcome.fail(Result.NOT_A_PLAYER, "Только для игроков");
+        }
+        return createSellOrderFromInventory(seller.getUUID(), exactUnit, pricePerUnit, quantity, requestId);
+    }
+
+    /** Application-level variant used by non-menu entry points and deterministic tests. */
+    public Outcome createSellOrderFromInventory(UUID sellerId, ItemStack exactUnit,
+                                                long pricePerUnit, int quantity, UUID requestId) {
+        if (sellerId == null) {
+            return Outcome.fail(Result.NOT_A_PLAYER, "Продавец не определён");
+        }
+        Outcome repeated = repeatedRequest(requestId, sellerId, OrderSide.SELL);
+        if (repeated != null) return repeated;
+        if (exactUnit == null || exactUnit.isEmpty()) {
+            return Outcome.fail(Result.INSUFFICIENT_ITEMS, "Предмет не выбран");
+        }
+        if (quantity <= 0) {
+            return Outcome.fail(Result.INVALID_QUANTITY, "Количество должно быть положительным");
+        }
+        ItemStack unit = exactUnit.copy();
+        unit.setCount(1);
+        int available = inventory.availableCount(sellerId, unit);
+        if (quantity > available) {
+            return Outcome.fail(Result.INSUFFICIENT_ITEMS,
+                    "Недостаточно точных предметов в инвентаре (доступно " + available + ")");
+        }
+        return placeSell(sellerId, unit, pricePerUnit, quantity, true, requestId);
+    }
+
+    public int availableCount(UUID playerId, ItemStack exactUnit) {
+        if (playerId == null || exactUnit == null || exactUnit.isEmpty()) return 0;
+        ItemStack unit = exactUnit.copy();
+        unit.setCount(1);
+        return inventory.availableCount(playerId, unit);
+    }
+
     public Outcome createBuyOrder(UUID buyerId, ItemStack unit, long pricePerUnit, int quantity) {
         return createBuyOrder(buyerId, unit, pricePerUnit, quantity, UUID.randomUUID());
     }

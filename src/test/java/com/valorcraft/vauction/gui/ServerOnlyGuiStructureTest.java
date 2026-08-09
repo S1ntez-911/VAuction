@@ -17,9 +17,13 @@ class ServerOnlyGuiStructureTest {
     @Test
     void allMarketCommandAliasesShareTheSameCommandTree() throws Exception {
         String commands = source("com/valorcraft/vauction/gui/MarketCommands.java");
-        assertTrue(commands.contains("register(root(\"market\"))"));
-        assertTrue(commands.contains("register(root(\"auction\"))"));
-        assertTrue(commands.contains("register(root(\"ah\"))"));
+        assertTrue(commands.contains("register(root(\"market\", context))"));
+        assertTrue(commands.contains("register(root(\"auction\", context))"));
+        assertTrue(commands.contains("register(root(\"ah\", context))"));
+        assertTrue(commands.contains("Commands.literal(\"help\")"));
+        assertTrue(commands.contains("Commands.literal(\"sell\")"));
+        assertTrue(commands.contains("Commands.literal(\"buy\")"));
+        assertTrue(commands.contains("ItemArgument.item(context)"));
     }
 
     @Test
@@ -65,5 +69,17 @@ class ServerOnlyGuiStructureTest {
         int inventoryRemoval = service.indexOf("inventory.tryTake(sellerId, unit, quantity)");
         assertTrue(requestGuard >= 0 && inventoryRemoval > requestGuard,
                 "a repeated sell confirmation must return before item custody is touched");
+    }
+
+    @Test
+    void navigationReusesOneOpenMenuAndKnownMarketSellDoesNotReturnToPicker() throws Exception {
+        String controller = source("com/valorcraft/vauction/gui/MarketController.java");
+        assertTrue(controller.contains("player.containerMenu == s.menu"));
+        assertTrue(controller.contains("s.menu.broadcastChanges()"));
+        assertTrue(controller.contains("createSellOrderFromInventory(player, s.unit"));
+        int beginOrder = controller.indexOf("private void beginOrder");
+        int renderEditor = controller.indexOf("private void renderEditor");
+        String body = controller.substring(beginOrder, renderEditor);
+        assertFalse(body.contains("renderPicker"), "known exact market must open the sell editor directly");
     }
 }
