@@ -89,6 +89,7 @@ tasks.withType(JavaCompile).configureEach {
 }
 
 jar {
+    archiveClassifier = 'slim'
     preserveFileTimestamps = false
     reproducibleFileOrder = true
     manifest {
@@ -101,4 +102,67 @@ jar {
                 'Implementation-Vendor': 'ValorCraft'
         ])
     }
+}
+
+// ForgeGradle remaps Mojmap method names to the SRG names used by a production
+// dedicated server. Keep the dependency-free jar visibly separate and make the
+// jarJar artifact the single server-ready file produced by `build`.
+tasks.named('jar').configure {
+    finalizedBy 'reobfJar'
+}
+
+tasks.named('jarJar').configure {
+    archiveClassifier = ''
+    preserveFileTimestamps = false
+    reproducibleFileOrder = true
+    finalizedBy 'reobfJarJar'
+}
+
+def java17Compiler = javaToolchains.compilerFor {
+    languageVersion = JavaLanguageVersion.of(17)
+}
+
+tasks.register('verifyProductionJar') {
+    group = 'verification'
+    description = 'Verifies that the server jar is reobfuscated and contains no game classes.'
+    dependsOn 'reobfJarJar'
+
+    doLast {
+        File productionJar = tasks.named('jarJar').get().archiveFile.get().asFile
+        if (!productionJar.isFile()) {
+            throw new GradleException("Production jar is missing: ${productionJar}")
+        }
+
+        def forbidden = zipTree(productionJar).matching {
+            include 'net/minecraft/**'
+            include 'net/minecraftforge/**'
+            include 'com/mojang/brigadier/**'
+        }.files
+        if (!forbidden.empty) {
+            throw new GradleException("Production jar embeds forbidden Minecraft/Forge/Brigadier classes: ${forbidden}")
+        }
+
+        File javac = java17Compiler.get().executablePath.asFile
+        File javap = new File(javac.parentFile,
+                System.getProperty('os.name').toLowerCase(Locale.ROOT).contains('windows') ? 'javap.exe' : 'javap')
+        def output = new ByteArrayOutputStream()
+        exec {
+            commandLine javap.absolutePath, '-classpath', productionJar.absolutePath,
+                    '-c', '-p', 'com.valorcraft.vauction.gui.MarketCommands'
+            standardOutput = output
+            errorOutput = output
+        }
+        String bytecode = output.toString('UTF-8')
+        if (bytecode.contains('net/minecraft/commands/Commands.literal:')
+                || bytecode.contains('net/minecraft/commands/Commands.argument:')) {
+            throw new GradleException('Production jar still contains Mojmap command calls; reobfuscation did not run.')
+        }
+        if (!bytecode.contains('net/minecraft/commands/Commands.m_82127_:')) {
+            throw new GradleException('Production jar does not contain the expected Forge 1.20.1 SRG command call.')
+        }
+    }
+}
+
+tasks.named('check').configure {
+    dependsOn tasks.named('verifyProductionJar')
 }

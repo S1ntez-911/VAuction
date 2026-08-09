@@ -71,14 +71,19 @@ VAuction — server-only мод для Minecraft Forge 1.20.1. GUI исполь�
 - каталог и «Моё» ограничены 45 записями на страницу; unified feed сортируется и ограничивается непосредственно в SQL;
 - notification flush и recovery имеют жёсткие лимиты работы.
 
-Поместите production JAR VEconomy и VAuction с суффиксом `-all.jar` в серверную папку `mods/`.
+Поместите `VEconomy-1.20.1-<version>-all.jar` и production JAR
+`VAuction-1.20.1-<version>.jar` в серверную папку `mods/`.
 
 ## Сборка
 
 ```powershell
-.\gradlew.bat clean test
-.\gradlew.bat build
-.\gradlew.bat jarJar
+.\gradlew.bat clean build
 ```
 
-Итоговый артефакт с SQLite JDBC находится в `build/libs/VAuction-1.20.1-<version>-all.jar`.
+Итоговый production-артефакт с SQLite JDBC находится в
+`build/libs/VAuction-1.20.1-<version>.jar`. Он проходит ForgeGradle reobfuscation
+и проверку байткода команд в составе обычного `build`.
+
+Файл с суффиксом `-slim.jar` не содержит SQLite JDBC и не предназначен для
+установки на сервер. Прямой запуск задачи `jarJar` также автоматически выполняет
+`reobfJarJar`, поэтому получить из неё dev-артефакт с Mojmap-вызовами нельзя.
