@@ -12,7 +12,7 @@ import java.util.UUID;
 final class MarketSession {
     final UUID playerId;
     final Map<Integer, GuiAction> actions = new HashMap<>();
-    MarketScreen screen = MarketScreen.HOME;
+    MarketScreen screen = MarketScreen.BROWSE;
     int page;
     String search = "";
     ItemStack unit = ItemStack.EMPTY;

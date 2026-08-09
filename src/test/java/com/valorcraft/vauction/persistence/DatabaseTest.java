@@ -108,14 +108,17 @@ class DatabaseTest {
             return null;
         });
         MarketReadRepository read = new MarketReadRepository();
-        assertEquals(29, db.query(c -> read.page(c, "", 0, 0, 29)).size(),
-                "GUI fetches only page size plus one continuation row");
-        assertEquals(29, db.query(c -> read.page(c, "", 0, 28, 29)).size());
-        assertEquals(16, db.query(c -> read.page(c, "", 0, 84, 29)).size());
-        assertEquals(29, db.query(c -> read.page(c, "copper", 0, 0, 29)).size(),
+        assertEquals(45, db.query(c -> read.page(c, "", 0, 0, 45)).size());
+        assertEquals(45, db.query(c -> read.page(c, "", 0, 45, 45)).size());
+        assertEquals(10, db.query(c -> read.page(c, "", 0, 90, 45)).size());
+        long total = db.query(c -> read.count(c, "", 0));
+        assertEquals(100, total);
+        assertEquals(3, (total + 44) / 45, "100 markets produce exactly three catalogue pages");
+        assertEquals(100L, db.query(c -> read.count(c, "copper", 0)).longValue());
+        assertEquals(45, db.query(c -> read.page(c, "copper", 0, 0, 45)).size(),
                 "normalized search is bounded and does not read trade history");
         for (int player = 0; player < 30; player++) {
-            assertTrue(db.query(c -> read.page(c, "", 0, 0, 29)).size() <= 29,
+            assertTrue(db.query(c -> read.page(c, "", 0, 0, 45)).size() <= 45,
                     "simultaneous opens retain a fixed SQL/result budget");
         }
     }

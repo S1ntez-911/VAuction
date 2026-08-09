@@ -60,7 +60,8 @@ class ServerOnlyGuiStructureTest {
     void refreshIsExplicitAndReadBudgetsAreHardCapped() throws Exception {
         String read = source("com/valorcraft/vauction/application/AuctionReadService.java");
         String events = source("com/valorcraft/vauction/gui/MarketEvents.java");
-        assertTrue(read.contains("PAGE_SIZE = 28"));
+        assertTrue(read.contains("PAGE_SIZE = 45"));
+        assertTrue(read.contains("markets.count"));
         assertTrue(read.contains("BOOK_DEPTH = 7"));
         assertFalse(events.contains("ServerTickEvent"));
     }
@@ -87,13 +88,12 @@ class ServerOnlyGuiStructureTest {
     }
 
     @Test
-    void playerHubExposesImmediateAndLimitFlowsWithoutFakePrices() throws Exception {
+    void marketUsesProgressiveImmediateAndOwnPriceFlowsWithoutFakePrices() throws Exception {
         String controller = source("com/valorcraft/vauction/gui/MarketController.java");
         String service = source("com/valorcraft/vauction/application/AuctionService.java");
         assertTrue(controller.contains("Купить сейчас"));
         assertTrue(controller.contains("Продать сейчас"));
-        assertTrue(controller.contains("Заявка на покупку"));
-        assertTrue(controller.contains("Заявка на продажу"));
+        assertTrue(controller.contains("Своя цена"));
         assertTrue(controller.contains("renderImmediateQuote"));
         assertTrue(service.contains("finishImmediate"));
         assertFalse(controller.contains("s.price = Long.MAX_VALUE"));
@@ -124,10 +124,28 @@ class ServerOnlyGuiStructureTest {
     }
 
     @Test
-    void emptyHandHomeCardUsesVisibleVanillaItem() throws Exception {
+    void rootOpensCatalogueAndListNavigationUsesFixedLastRow() throws Exception {
         String controller = source("com/valorcraft/vauction/gui/MarketController.java");
-        assertTrue(controller.contains("new ItemStack(Items.PAPER), \"Предмет в руке\""));
-        assertFalse(controller.contains("new ItemStack(Items.AIR), \"Предмет в руке\""));
+        int open = controller.indexOf("public void open(ServerPlayer player)");
+        int search = controller.indexOf("public void search", open);
+        String root = controller.substring(open, search);
+        assertTrue(root.contains("renderMarkets(player, session)"));
+        assertFalse(root.contains("renderHome"));
+        assertTrue(controller.contains("IntStream.range(0, 45)"));
+        assertTrue(controller.contains("NAV_PREVIOUS = 45"));
+        assertTrue(controller.contains("NAV_NEXT = 53"));
+        assertTrue(controller.contains("page.totalPages()"));
+    }
+
+    @Test
+    void realMarketItemsUseNativeSafeDecoratorAndMenuIsOpenedOnlyOnce() throws Exception {
+        String controller = source("com/valorcraft/vauction/gui/MarketController.java");
+        String items = source("com/valorcraft/vauction/gui/GuiItems.java");
+        assertTrue(controller.contains("GuiItems.decorateMarketItem(visual"));
+        assertTrue(items.contains("result = source.copy()"));
+        assertTrue(items.contains("getList(\"Lore\""));
+        assertFalse(items.substring(items.indexOf("decorateMarketItem")).contains("setHoverName"));
+        assertEquals(1, controller.split("player\\.openMenu", -1).length - 1);
     }
 
     @Test

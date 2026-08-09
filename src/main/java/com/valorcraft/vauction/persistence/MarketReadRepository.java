@@ -69,6 +69,31 @@ public final class MarketReadRepository {
         }
     }
 
+    /** Exact, bounded count using the same visibility rules as {@link #page}. */
+    public long count(Connection c, String rawQuery, long recentCutoff) {
+        String query = rawQuery == null ? "" : rawQuery.trim().toLowerCase(Locale.ROOT);
+        boolean searching = !query.isEmpty();
+        String sql = searching
+                ? "SELECT COUNT(*) FROM (SELECT market_key FROM auction_orders "
+                + "WHERE status='ACTIVE' AND processing_state='NONE' AND item_search_name LIKE ? ESCAPE '\\' "
+                + "GROUP BY market_key)"
+                : "WITH active AS (SELECT market_key, MAX(updated_at) activity FROM auction_orders "
+                + "WHERE status='ACTIVE' AND processing_state='NONE' GROUP BY market_key), "
+                + "recent AS (SELECT market_key, MAX(settled_at) activity FROM auction_trades "
+                + "WHERE state='SETTLED' AND settled_at>=? GROUP BY market_key), "
+                + "candidate AS (SELECT market_key FROM (SELECT * FROM active UNION ALL SELECT * FROM recent) "
+                + "GROUP BY market_key) SELECT COUNT(*) FROM candidate";
+        try (PreparedStatement ps = c.prepareStatement(sql)) {
+            if (searching) ps.setString(1, "%" + escapeLike(query) + "%");
+            else ps.setLong(1, recentCutoff);
+            try (ResultSet rs = ps.executeQuery()) {
+                return rs.next() ? rs.getLong(1) : 0;
+            }
+        } catch (SQLException e) {
+            throw new DatabaseException("market GUI count failed", e);
+        }
+    }
+
     public Optional<MarketCard> byKey(Connection c, String marketKey) {
         String sql = "WITH paged AS (SELECT ? market_key) " + CARD_SELECT;
         try (PreparedStatement ps = c.prepareStatement(sql)) {

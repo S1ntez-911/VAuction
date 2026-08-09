@@ -24,7 +24,7 @@ import java.math.RoundingMode;
 
 /** Bounded, GUI-oriented reads. Mutations remain exclusively in {@link AuctionService}. */
 public final class AuctionReadService {
-    public static final int PAGE_SIZE = 28;
+    public static final int PAGE_SIZE = 45;
     public static final int BOOK_DEPTH = 7;
     private static final long RECENT_MARKET_MILLIS = 30L * 24L * 60L * 60L * 1000L;
 
@@ -79,11 +79,14 @@ public final class AuctionReadService {
     }
 
     public Page<MarketCard> markets(int requestedPage, String query) {
-        int page = Math.max(0, requestedPage);
-        List<MarketCard> rows = database.query(c -> markets.page(c, query,
-                System.currentTimeMillis() - RECENT_MARKET_MILLIS,
-                page * PAGE_SIZE, PAGE_SIZE + 1));
-        return trim(rows, page);
+        long cutoff = System.currentTimeMillis() - RECENT_MARKET_MILLIS;
+        long total = database.query(c -> markets.count(c, query, cutoff));
+        int totalPages = Math.max(1, (int) Math.min(Integer.MAX_VALUE,
+                (total + PAGE_SIZE - 1) / PAGE_SIZE));
+        int page = Math.min(Math.max(0, requestedPage), totalPages - 1);
+        List<MarketCard> rows = database.query(c -> markets.page(c, query, cutoff,
+                page * PAGE_SIZE, PAGE_SIZE));
+        return new Page<>(rows, page, page > 0, page + 1 < totalPages, total, totalPages);
     }
 
     public MarketView market(ItemStack selectedUnit) {
