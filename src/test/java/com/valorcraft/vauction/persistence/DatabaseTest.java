@@ -96,6 +96,47 @@ class DatabaseTest {
     }
 
     @Test
+    void guiMarketReadIsBoundedAcrossOneHundredMarkets() {
+        OrderRepository orderRepository = new OrderRepository();
+        db.inTransaction(c -> {
+            for (int i = 0; i < 100; i++) {
+                Order order = Order.newOrder(UUID.randomUUID(), OrderSide.SELL, "market:" + i,
+                        item("minecraft:copper_ingot"), i + 1L, 1, i + 1L).build();
+                orderRepository.insert(c, order);
+            }
+            return null;
+        });
+        MarketReadRepository read = new MarketReadRepository();
+        assertEquals(29, db.query(c -> read.page(c, "", 0, 0, 29)).size(),
+                "GUI fetches only page size plus one continuation row");
+        assertEquals(29, db.query(c -> read.page(c, "", 0, 28, 29)).size());
+        assertEquals(16, db.query(c -> read.page(c, "", 0, 84, 29)).size());
+        assertEquals(29, db.query(c -> read.page(c, "copper", 0, 0, 29)).size(),
+                "normalized search is bounded and does not read trade history");
+        for (int player = 0; player < 30; player++) {
+            assertTrue(db.query(c -> read.page(c, "", 0, 0, 29)).size() <= 29,
+                    "simultaneous opens retain a fixed SQL/result budget");
+        }
+    }
+
+    @Test
+    void guiPageQueriesUseV006Indexes() {
+        assertPlanUses("SELECT order_id FROM auction_orders WHERE owner_uuid='x' "
+                        + "ORDER BY created_at DESC, order_id DESC LIMIT 29 OFFSET 0",
+                "idx_orders_owner_page");
+        assertPlanUses("SELECT delivery_id FROM auction_deliveries "
+                        + "WHERE player_uuid='x' AND state='CLAIMABLE' "
+                        + "ORDER BY created_at DESC, delivery_id DESC LIMIT 29 OFFSET 0",
+                "idx_deliveries_player_state_page");
+        assertPlanUses("SELECT market_key, MAX(settled_at) FROM auction_trades "
+                        + "WHERE state='SETTLED' AND settled_at>=0 GROUP BY market_key",
+                "idx_trades_settled_market");
+        assertPlanUses("SELECT execution_price FROM auction_trades WHERE market_key='x' "
+                        + "AND state='SETTLED' ORDER BY settled_at DESC, trade_id DESC LIMIT 1",
+                "idx_trades_market_last");
+    }
+
+    @Test
     void populatedPreV003DatabaseMigratesAndKeepsOperationPhase() {
         SqliteJdbcSource source = new SqliteJdbcSource("jdbc:sqlite::memory:");
         source.open();
@@ -118,7 +159,7 @@ class DatabaseTest {
             });
 
             MigrationRunner.Result result = source.query(MigrationRunner::run);
-            assertEquals(5, result.schemaVersion());
+            assertEquals(6, result.schemaVersion());
             String phase = source.query(c -> {
                 try (Statement st = c.createStatement();
                      ResultSet rs = st.executeQuery(
@@ -134,7 +175,7 @@ class DatabaseTest {
     }
 
     @Test
-    void populatedV004UpgradesToV005AndSeedsDurableMatchingQueue() {
+    void populatedV004UpgradesThroughV006AndSeedsDurableMatchingQueue() {
         SqliteJdbcSource source = new SqliteJdbcSource("jdbc:sqlite::memory:");
         source.open();
         try {
@@ -158,8 +199,9 @@ class DatabaseTest {
             });
 
             MigrationRunner.Result result = source.query(MigrationRunner::run);
-            assertEquals(5, result.schemaVersion());
-            assertEquals(List.of("V005__bounded_work.sql"), result.appliedFiles());
+            assertEquals(6, result.schemaVersion());
+            assertEquals(List.of("V005__bounded_work.sql", "V006__gui_read_indexes.sql"),
+                    result.appliedFiles());
             int acceptedRows = source.query(c -> {
                 try (Statement st = c.createStatement(); ResultSet rs = st.executeQuery(
                         "SELECT COUNT(*) FROM auction_order_acceptance")) {
@@ -296,7 +338,7 @@ class DatabaseTest {
 
         try (DatabaseManager fileDb = DatabaseManager.openSqlite(databasePath)) {
             fileDb.initialize();
-            assertEquals(5, fileDb.schemaVersion());
+            assertEquals(6, fileDb.schemaVersion());
         }
 
         assertTrue(Files.isRegularFile(databasePath));

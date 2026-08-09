@@ -120,6 +120,24 @@ class AuctionServiceTest {
     }
 
     @Test
+    void repeatedGuiBuyConfirmationCreatesOneOrderAndOneReserve() {
+        UUID buyer = UUID.randomUUID();
+        UUID requestId = UUID.randomUUID();
+        economy.balances.put(buyer, 10_000L);
+        ItemStack item = new ItemStack(Items.IRON_INGOT);
+
+        AuctionService.Outcome first = service.createBuyOrder(buyer, item, 25, 4, requestId);
+        AuctionService.Outcome second = service.createBuyOrder(buyer, item, 25, 4, requestId);
+
+        assertTrue(first.isSuccess());
+        assertTrue(second.isSuccess());
+        assertEquals(requestId, first.order().orderId());
+        assertEquals(requestId, second.order().orderId());
+        assertEquals(1, economy.reserveCalls);
+        assertEquals(1, db.query(c -> orders.activeForOwner(c, buyer)).size());
+    }
+
+    @Test
     void deliveryQuantityDecodesAndDuplicateClaimCannotGiveTwice() {
         UUID buyer = UUID.randomUUID();
         UUID seller = UUID.randomUUID();

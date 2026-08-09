@@ -8,15 +8,7 @@ version="${version}"
 displayName="VAuction"
 authors="ValorCraft"
 displayTest="IGNORE_SERVER_VERSION"
-description='''VAuction (Forge 1.20.1) - серверный аукцион: лоты на продажу, заявки на покупку с нативной заморозкой средств через VEconomy, почта для офлайн-доставки, GUI-меню, журнал операций с идемпотентностью и собственное хранилище SQLite (миграции + optimistic locking).'''
-
-[[mods]]
-modId="exchange_core"
-version="${version}"
-displayName="ResourceExchange"
-authors="ValorCraft"
-displayTest="IGNORE_SERVER_VERSION"
-description='''Совместимый модуль ResourceExchange, поставляемый в составе VAuction.'''
+description='''VAuction — серверная биржа ресурсов для Forge 1.20.1. Игроки используют ванильное меню сундука через /market; установка VAuction или VEconomy на клиент не требуется. Заявки BUY/SELL, escrow VEconomy, безопасные доставки, SQLite и восстановление после сбоев выполняются только сервером.'''
 
 [[dependencies.vauction]]
     modId="minecraft"
@@ -33,27 +25,6 @@ description='''Совместимый модуль ResourceExchange, поста�
     side="BOTH"
 
 [[dependencies.vauction]]
-    modId="economy_core"
-    mandatory=true
-    versionRange="[1.0,2.0)"
-    ordering="AFTER"
-    side="SERVER"
-
-[[dependencies.exchange_core]]
-    modId="minecraft"
-    mandatory=true
-    versionRange="[1.20.1,1.21)"
-    ordering="NONE"
-    side="BOTH"
-
-[[dependencies.exchange_core]]
-    modId="forge"
-    mandatory=true
-    versionRange="[47,)"
-    ordering="NONE"
-    side="BOTH"
-
-[[dependencies.exchange_core]]
     modId="economy_core"
     mandatory=true
     versionRange="[1.0,2.0)"

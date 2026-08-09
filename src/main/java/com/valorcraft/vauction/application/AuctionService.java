@@ -151,9 +151,17 @@ public final class AuctionService {
 
     /** Выставить на продажу из слота инвентаря (сбор одинаковых стеков из нескольких слотов). */
     public Outcome createSellOrderFromSlot(ServerPlayer seller, int slotIndex, long pricePerUnit, int quantity) {
+        return createSellOrderFromSlot(seller, slotIndex, pricePerUnit, quantity, UUID.randomUUID());
+    }
+
+    /** GUI-safe overload: requestId is persisted as the order id. */
+    public Outcome createSellOrderFromSlot(ServerPlayer seller, int slotIndex, long pricePerUnit,
+                                           int quantity, UUID requestId) {
         if (seller == null) {
             return Outcome.fail(Result.NOT_A_PLAYER, "Только для игроков");
         }
+        Outcome repeated = repeatedRequest(requestId, seller.getUUID(), OrderSide.SELL);
+        if (repeated != null) return repeated;
         if (slotIndex < 0 || slotIndex >= seller.getInventory().getContainerSize()) {
             return Outcome.fail(Result.INVALID_QUANTITY, "Некорректный слот");
         }
@@ -172,13 +180,21 @@ public final class AuctionService {
             return Outcome.fail(Result.INSUFFICIENT_ITEMS,
                     "Недостаточно предметов в инвентаре (доступно " + available + ")");
         }
-        return placeSell(seller.getUUID(), probe, pricePerUnit, quantity, true);
+        return placeSell(seller.getUUID(), probe, pricePerUnit, quantity, true, requestId);
     }
 
     public Outcome createBuyOrder(UUID buyerId, ItemStack unit, long pricePerUnit, int quantity) {
+        return createBuyOrder(buyerId, unit, pricePerUnit, quantity, UUID.randomUUID());
+    }
+
+    /** GUI-safe overload: repeated confirmation returns the already accepted order. */
+    public Outcome createBuyOrder(UUID buyerId, ItemStack unit, long pricePerUnit, int quantity,
+                                  UUID requestId) {
         if (buyerId == null) {
             return Outcome.fail(Result.NOT_A_PLAYER, "Покупатель не определён");
         }
+        Outcome repeated = repeatedRequest(requestId, buyerId, OrderSide.BUY);
+        if (repeated != null) return repeated;
         if (unit == null || unit.isEmpty()) {
             return Outcome.fail(Result.INVALID_QUANTITY, "Предмет не определён");
         }
@@ -217,13 +233,13 @@ public final class AuctionService {
         } catch (ItemCodecException e) {
             return Outcome.fail(Result.BLACKLISTED, "Предмет не удалось закодировать");
         }
-        return placeBuy(buyerId, unit, unitSnapshot, pricePerUnit, quantity, total);
+        return placeBuy(buyerId, unit, unitSnapshot, pricePerUnit, quantity, total, requestId);
     }
 
     // ================================================================ размещение
 
     private Outcome placeBuy(UUID buyerId, ItemStack unit, ItemSnapshot unitSnapshot,
-                             long pricePerUnit, int quantity, long total) {
+                             long pricePerUnit, int quantity, long total, UUID requestId) {
         String key = marketKeyOf(unit);
         if (key == null) {
             return Outcome.fail(Result.BLACKLISTED, "Предмет не допустим на рынке");
@@ -233,7 +249,7 @@ public final class AuctionService {
             return Outcome.fail(Result.OVER_LIMIT, "Достигнут лимит активных buy-заявок");
         }
         long now = now();
-        UUID orderId = UUID.randomUUID();
+        UUID orderId = requestId == null ? UUID.randomUUID() : requestId;
         String ref0 = refFor(orderId, 0);
         Order order;
         try {
@@ -299,6 +315,11 @@ public final class AuctionService {
 
     private Outcome placeSell(UUID sellerId, ItemStack unit, long pricePerUnit, int quantity,
                               boolean lockInventory) {
+        return placeSell(sellerId, unit, pricePerUnit, quantity, lockInventory, UUID.randomUUID());
+    }
+
+    private Outcome placeSell(UUID sellerId, ItemStack unit, long pricePerUnit, int quantity,
+                              boolean lockInventory, UUID requestId) {
         if (quantity <= 0) {
             return Outcome.fail(Result.INVALID_QUANTITY, "Количество должно быть положительным");
         }
@@ -326,7 +347,7 @@ public final class AuctionService {
             return Outcome.fail(Result.OVER_LIMIT, "Достигнут лимит активных sell-ордеров");
         }
         long now = now();
-        UUID orderId = UUID.randomUUID();
+        UUID orderId = requestId == null ? UUID.randomUUID() : requestId;
         Order order;
         try {
             Order created = Order.newOrder(sellerId, OrderSide.SELL, key, unitSnapshot,
@@ -898,6 +919,19 @@ public final class AuctionService {
             return 0L;
         }
         return database.query(conn -> trades.lastTradePrice(conn, key));
+    }
+
+    private Outcome repeatedRequest(UUID requestId, UUID actorId, OrderSide expectedSide) {
+        if (requestId == null) return null;
+        Order existing = database.query(c -> orders.findById(c, requestId).orElse(null));
+        if (existing == null) return null;
+        if (!existing.ownerUuid().equals(actorId) || existing.side() != expectedSide) {
+            return Outcome.fail(Result.DATABASE_FAILED, "Ключ подтверждения уже использован");
+        }
+        if (existing.processingState() != OrderProcessingState.NONE) {
+            return Outcome.pending("Заявка уже принята и завершается безопасно", existing);
+        }
+        return Outcome.ok("Заявка уже была принята", existing, List.of());
     }
 
     // ================================================================ manual review

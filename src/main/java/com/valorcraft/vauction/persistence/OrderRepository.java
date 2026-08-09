@@ -203,6 +203,22 @@ public final class OrderRepository {
         }
     }
 
+    /** Bounded newest-first page for the player GUI (all statuses, no history scan in Java). */
+    public List<Order> pageForOwner(Connection c, UUID ownerUuid, int offset, int limit) {
+        String sql = "SELECT " + COLUMNS + " FROM auction_orders WHERE owner_uuid = ? "
+                + "ORDER BY created_at DESC, order_id DESC LIMIT ? OFFSET ?";
+        try (PreparedStatement ps = c.prepareStatement(sql)) {
+            ps.setString(1, ownerUuid.toString());
+            ps.setInt(2, Math.max(1, limit));
+            ps.setInt(3, Math.max(0, offset));
+            try (ResultSet rs = ps.executeQuery()) {
+                return mapAll(rs);
+            }
+        } catch (SQLException e) {
+            throw new DatabaseException("player order page failed", e);
+        }
+    }
+
     /** True when an older crossing maker exists but may currently hold a processing lock. */
     public boolean hasOlderCrossingCounterpart(Connection c, String marketKey,
                                                 OrderSide incomingSide, long incomingPrice,
@@ -260,13 +276,19 @@ public final class OrderRepository {
 
     /** Уровни стакана по стороне (GROUP BY цена → суммарный остаток). */
     public List<OrderBookLevel> bookLevels(Connection c, String marketKey, OrderSide side) {
+        return bookLevels(c, marketKey, side, Integer.MAX_VALUE);
+    }
+
+    /** Bounded aggregate depth used by the GUI. */
+    public List<OrderBookLevel> bookLevels(Connection c, String marketKey, OrderSide side, int limit) {
         String sql = "SELECT price_per_unit, SUM(remaining_quantity) AS qty FROM auction_orders "
                 + "WHERE market_key = ? AND side = ? AND status = 'ACTIVE' AND processing_state = 'NONE' "
                 + "GROUP BY price_per_unit ORDER BY price_per_unit "
-                + (side == OrderSide.BUY ? "DESC" : "ASC");
+                + (side == OrderSide.BUY ? "DESC" : "ASC") + " LIMIT ?";
         try (PreparedStatement ps = c.prepareStatement(sql)) {
             ps.setString(1, marketKey);
             ps.setString(2, side.name());
+            ps.setInt(3, Math.max(1, limit));
             try (ResultSet rs = ps.executeQuery()) {
                 List<OrderBookLevel> out = new ArrayList<>();
                 while (rs.next()) {

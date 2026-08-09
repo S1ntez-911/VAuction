@@ -1,6 +1,7 @@
 package com.valorcraft.vauction.bootstrap;
 
 import com.valorcraft.vauction.application.AuctionService;
+import com.valorcraft.vauction.application.AuctionReadService;
 import com.valorcraft.vauction.application.DeliveryService;
 import com.valorcraft.vauction.application.InventoryOps;
 import com.valorcraft.vauction.application.ListingService;
@@ -58,6 +59,7 @@ public final class VAuctionCore {
     private ListingService listingService;
     private DeliveryService deliveryService;
     private AuctionService auctionService;
+    private AuctionReadService auctionReadService;
     private RecoveryService recoveryService;
 
     private VAuctionCore() {}
@@ -107,10 +109,13 @@ public final class VAuctionCore {
             core.inventoryOps = new ServerInventoryOps(() -> server);
             core.listingService = new ListingService(core.database, core.listings, core.operations, core.codec);
             core.deliveryService = new DeliveryService(core.database, core.deliveries);
+            ExactItemMarketKeyStrategy marketKeys = new ExactItemMarketKeyStrategy(core.codec);
             core.auctionService = new AuctionService(core.database, core.orders, core.trades,
                     core.operations, core.deliveries, core.codec,
-                    new ExactItemMarketKeyStrategy(core.codec),
+                    marketKeys,
                     core.economyGateway, core.inventoryOps, core.settings);
+            core.auctionReadService = new AuctionReadService(core.database, core.orders,
+                    core.deliveries, core.codec, marketKeys);
             core.recoveryService = new RecoveryService(core.database, core.orders, core.trades,
                     core.deliveries, core.economyGateway, core.auctionService);
 
@@ -211,6 +216,10 @@ public final class VAuctionCore {
 
     public AuctionService auctionService() {
         return auctionService;
+    }
+
+    public AuctionReadService auctionReadService() {
+        return auctionReadService;
     }
 
     public DeliveryService deliveryService() {

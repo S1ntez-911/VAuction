@@ -90,6 +90,25 @@ public final class DeliveryRepository {
         }
     }
 
+    /** Bounded newest-first CLAIMABLE page owned by one player. */
+    public List<AuctionDelivery> claimablePage(Connection c, UUID playerUuid, int offset, int limit) {
+        String sql = "SELECT " + COLUMNS + " FROM auction_deliveries "
+                + "WHERE player_uuid = ? AND state = 'CLAIMABLE' "
+                + "ORDER BY created_at DESC, delivery_id DESC LIMIT ? OFFSET ?";
+        try (PreparedStatement ps = c.prepareStatement(sql)) {
+            ps.setString(1, playerUuid.toString());
+            ps.setInt(2, Math.max(1, limit));
+            ps.setInt(3, Math.max(0, offset));
+            try (ResultSet rs = ps.executeQuery()) {
+                List<AuctionDelivery> out = new ArrayList<>();
+                while (rs.next()) out.add(map(rs));
+                return out;
+            }
+        } catch (SQLException e) {
+            throw new DatabaseException("claimable delivery page failed", e);
+        }
+    }
+
     /** Письма игрока, ожидающие выдачи (PENDING). */
     public List<AuctionDelivery> pendingForPlayer(Connection c, UUID playerUuid) {
         String sql = "SELECT " + COLUMNS + " FROM auction_deliveries WHERE player_uuid = ? AND state = 'PENDING' "
