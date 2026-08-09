@@ -4,6 +4,8 @@ package com.valorcraft.vauction.application;
 public final class AuctionWorkLimits {
     public static final int MAX_MATCH_FILLS_PER_PUMP = 8;
     public static final int MAX_MATCH_OPERATIONS_PER_PUMP = 16;
+    /** Individual maker fills considered by both an immediate quote and its targeted execution. */
+    public static final int MAX_IMMEDIATE_MATCH_FILLS = 32;
     public static final int MAX_RUNTIME_RECOVERY_OPERATIONS = 8;
     public static final int MAX_EXPIRY_OPERATIONS = 8;
     public static final int MAX_SERVER_TICK_OPERATIONS = 24;

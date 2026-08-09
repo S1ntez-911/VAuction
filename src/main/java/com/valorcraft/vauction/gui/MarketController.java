@@ -215,8 +215,9 @@ public final class MarketController {
                 put(box, s, 22, context, GuiAction.market(unit));
             }
         } else {
-            box.setItem(22, GuiItems.named(new ItemStack(Items.AIR), "Предмет в руке",
-                    ChatFormatting.GRAY, "Возьмите предмет в руку для быстрого доступа к его рынку."));
+            box.setItem(22, GuiItems.named(new ItemStack(Items.PAPER), "Предмет в руке",
+                    ChatFormatting.GRAY, "Возьмите ресурс в основную руку,",
+                    "чтобы быстро открыть его рынок."));
         }
         openBox(player, s, box, "Биржа ресурсов");
     }

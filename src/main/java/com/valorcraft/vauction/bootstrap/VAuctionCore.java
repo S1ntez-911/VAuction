@@ -118,7 +118,7 @@ public final class VAuctionCore {
                     marketKeys,
                     core.economyGateway, core.inventoryOps, core.settings);
             core.auctionReadService = new AuctionReadService(core.database, core.orders,
-                    core.deliveries, core.codec, marketKeys);
+                    core.deliveries, core.codec, marketKeys, core.settings.allowSelfPurchase());
             core.recoveryService = new RecoveryService(core.database, core.orders, core.trades,
                     core.deliveries, core.economyGateway, core.auctionService);
             PlayerMarketStateRepository playerStates = new PlayerMarketStateRepository();

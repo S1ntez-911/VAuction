@@ -83,6 +83,16 @@ public final class MatchWorkRepository {
         }
     }
 
+    public void deleteByOrderId(Connection c, UUID orderId) {
+        try (PreparedStatement ps = c.prepareStatement(
+                "DELETE FROM auction_match_queue WHERE order_id=?")) {
+            ps.setString(1, orderId.toString());
+            ps.executeUpdate();
+        } catch (SQLException e) {
+            throw new DatabaseException("delete matching work by order failed: " + orderId, e);
+        }
+    }
+
     public Optional<MatchWork> findByOrderId(Connection c, UUID orderId) {
         String sql = "SELECT work_id, order_id, created_at, next_attempt_at, attempt_count "
                 + "FROM auction_match_queue WHERE order_id=?";

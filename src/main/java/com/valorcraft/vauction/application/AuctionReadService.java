@@ -58,15 +58,23 @@ public final class AuctionReadService {
     private final MarketReadRepository markets;
     private final ItemStackCodec codec;
     private final MarketKeyStrategy keys;
+    private final boolean allowSelfPurchase;
 
     public AuctionReadService(DatabaseManager database, OrderRepository orders,
                               DeliveryRepository deliveries, ItemStackCodec codec,
                               MarketKeyStrategy keys) {
+        this(database, orders, deliveries, codec, keys, false);
+    }
+
+    public AuctionReadService(DatabaseManager database, OrderRepository orders,
+                              DeliveryRepository deliveries, ItemStackCodec codec,
+                              MarketKeyStrategy keys, boolean allowSelfPurchase) {
         this.database = database;
         this.orders = orders;
         this.deliveries = deliveries;
         this.codec = codec;
         this.keys = keys;
+        this.allowSelfPurchase = allowSelfPurchase;
         this.markets = new MarketReadRepository();
     }
 
@@ -124,7 +132,9 @@ public final class AuctionReadService {
         }
         OrderSide liquiditySide = side == OrderSide.BUY ? OrderSide.SELL : OrderSide.BUY;
         List<OrderBookLevel> book = database.query(c ->
-                orders.immediateLiquidity(c, key, liquiditySide, actor, 32));
+                orders.immediateLiquidity(c, key, liquiditySide,
+                        allowSelfPurchase ? null : actor,
+                        AuctionWorkLimits.MAX_IMMEDIATE_MATCH_FILLS));
         List<QuoteLevel> used = new ArrayList<>();
         int remaining = requested;
         long total = 0;

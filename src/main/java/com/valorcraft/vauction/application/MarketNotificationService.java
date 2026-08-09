@@ -1,6 +1,7 @@
 package com.valorcraft.vauction.application;
 
 import com.valorcraft.vauction.domain.order.Order;
+import com.valorcraft.vauction.domain.order.OrderSide;
 import com.valorcraft.vauction.domain.trade.Trade;
 import com.valorcraft.vauction.persistence.DatabaseManager;
 import com.valorcraft.vauction.persistence.DeliveryRepository;
@@ -33,29 +34,8 @@ public final class MarketNotificationService {
     private final PlayerMarketStateRepository states;
     private final MinecraftServer server;
     private final IocOrderRepository iocOrders = new IocOrderRepository();
-    private final Map<UUID, Batch> batches = new LinkedHashMap<>();
+    private final Map<UUID, MarketNotificationBatch> batches = new LinkedHashMap<>();
     private int ticksUntilFlush = FLUSH_INTERVAL_TICKS;
-
-    private static final class Batch {
-        long bought;
-        long sold;
-        int fills;
-        long tradeAt;
-        String tradeId = "";
-        UUID latestOrder;
-
-        void add(Trade trade, boolean buyer) {
-            if (buyer) bought += trade.quantity(); else sold += trade.quantity();
-            fills++;
-            long at = trade.settledAt() == null ? trade.createdAt() : trade.settledAt();
-            String id = trade.tradeId().toString();
-            if (at > tradeAt || (at == tradeAt && id.compareTo(tradeId) > 0)) {
-                tradeAt = at;
-                tradeId = id;
-                latestOrder = buyer ? trade.buyOrderId() : trade.sellOrderId();
-            }
-        }
-    }
 
     public MarketNotificationService(DatabaseManager database, OrderRepository orders,
                                      TradeRepository trades, DeliveryRepository deliveries,
@@ -72,14 +52,16 @@ public final class MarketNotificationService {
         ServerPlayer buyer = server.getPlayerList().getPlayer(trade.buyerUuid());
         boolean instantBuyer = database.query(c -> iocOrders.exists(c, trade.buyOrderId()));
         if (buyer != null && !instantBuyer) {
-            batches.computeIfAbsent(trade.buyerUuid(), ignored -> new Batch()).add(trade, true);
+            batches.computeIfAbsent(trade.buyerUuid(), ignored -> new MarketNotificationBatch())
+                    .add(trade, OrderSide.BUY);
         } else if (buyer != null) {
             markSeenNow(buyer, trade);
         }
         ServerPlayer seller = server.getPlayerList().getPlayer(trade.sellerUuid());
         boolean instantSeller = database.query(c -> iocOrders.exists(c, trade.sellOrderId()));
         if (seller != null && !instantSeller) {
-            batches.computeIfAbsent(trade.sellerUuid(), ignored -> new Batch()).add(trade, false);
+            batches.computeIfAbsent(trade.sellerUuid(), ignored -> new MarketNotificationBatch())
+                    .add(trade, OrderSide.SELL);
         } else if (seller != null) {
             markSeenNow(seller, trade);
         }
@@ -89,32 +71,36 @@ public final class MarketNotificationService {
         if (--ticksUntilFlush > 0) return;
         ticksUntilFlush = FLUSH_INTERVAL_TICKS;
         int sent = 0;
-        Iterator<Map.Entry<UUID, Batch>> iterator = batches.entrySet().iterator();
+        Iterator<Map.Entry<UUID, MarketNotificationBatch>> iterator = batches.entrySet().iterator();
         while (iterator.hasNext() && sent++ < MAX_BATCHES_PER_FLUSH) {
-            Map.Entry<UUID, Batch> entry = iterator.next();
+            Map.Entry<UUID, MarketNotificationBatch> entry = iterator.next();
             iterator.remove();
             ServerPlayer player = server.getPlayerList().getPlayer(entry.getKey());
             if (player == null) continue; // durable cursor is intentionally not advanced
-            Batch batch = entry.getValue();
-            Order order = batch.latestOrder == null ? null
-                    : database.query(c -> orders.findById(c, batch.latestOrder).orElse(null));
-            String item = order == null ? "предметов" : order.item().displayName();
-            String action = batch.bought > 0 ? "Куплено " + batch.bought : "Продано " + batch.sold;
-            String progress = order == null ? "" : order.remainingQuantity() == 0
-                    ? " Заявка выполнена полностью."
-                    : " Осталось: " + order.remainingQuantity() + ".";
-            player.sendSystemMessage(Component.literal("[Биржа] " + action + " " + item
-                    + " в " + batch.fills + pluralDeals(batch.fills) + "." + progress)
-                    .withStyle(batch.bought > 0 ? ChatFormatting.GREEN : ChatFormatting.GOLD));
-            if (batch.bought > 0) {
+            MarketNotificationBatch batch = entry.getValue();
+            for (MarketNotificationBatch.OrderBatch orderBatch : batch.orders()) {
+                Order order = database.query(c -> orders.findById(c, orderBatch.orderId()).orElse(null));
+                String item = order == null ? "предметов" : order.item().displayName();
+                String action = orderBatch.side() == OrderSide.BUY ? "Куплено " : "Продано ";
+                String progress = order == null ? "" : order.remainingQuantity() == 0
+                        ? " Заявка выполнена полностью."
+                        : " Осталось: " + order.remainingQuantity() + ".";
+                player.sendSystemMessage(Component.literal("[Биржа] " + action + orderBatch.quantity()
+                        + " " + item + " в " + orderBatch.fills()
+                        + pluralDeals(orderBatch.fills()) + "." + progress)
+                        .withStyle(orderBatch.side() == OrderSide.BUY
+                                ? ChatFormatting.GREEN : ChatFormatting.GOLD));
+            }
+            if (batch.hasPurchases()) {
                 player.sendSystemMessage(Component.literal("[Получить предметы]")
                         .withStyle(style -> style.withColor(ChatFormatting.AQUA)
                                 .withClickEvent(new ClickEvent(ClickEvent.Action.RUN_COMMAND, "/ah claims"))));
             }
             player.playNotifySound(SoundEvents.EXPERIENCE_ORB_PICKUP, SoundSource.MASTER, 0.45f, 1.1f);
             long deliveryCursor = database.query(c -> deliveries.latestClaimableId(c, player.getUUID()));
+            MarketNotificationBatch.Cursor cursor = batch.cursor();
             database.inTransaction(c -> {
-                states.advance(c, player.getUUID(), batch.tradeAt, batch.tradeId, deliveryCursor);
+                states.advance(c, player.getUUID(), cursor.settledAt(), cursor.tradeId(), deliveryCursor);
                 return null;
             });
         }

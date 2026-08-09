@@ -77,7 +77,6 @@ public final class AuctionService {
     private static final int MAX_DELIVERY_CHUNK = 64;
     private static final long MILLIS_PER_DAY = 86_400_000L;
     private static final long MATCH_RETRY_DELAY_MILLIS = 1_000L;
-    private static final int MAX_IMMEDIATE_MATCH_FILLS = 32;
 
     public enum Result {
         SUCCESS, ACCEPTED_PENDING, NOT_A_PLAYER, ORDER_NOT_FOUND, NOT_YOUR_ORDER, SELF_TRADE,
@@ -376,7 +375,7 @@ public final class AuctionService {
                     "Резерв создан, активация BUY будет завершена recovery");
         }
 
-        MatchingReport matching = pumpMatching(
+        MatchingReport matching = immediate ? new MatchingReport(List.of(), 0, true) : pumpMatching(
                 WorkBudget.timed(AuctionWorkLimits.MAX_MATCH_OPERATIONS_PER_PUMP,
                         AuctionWorkLimits.MAX_MAINTENANCE_NANOS),
                 AuctionWorkLimits.MAX_MATCH_FILLS_PER_PUMP);
@@ -482,7 +481,7 @@ public final class AuctionService {
             }
         }
 
-        MatchingReport matching = pumpMatching(
+        MatchingReport matching = immediate ? new MatchingReport(List.of(), 0, true) : pumpMatching(
                 WorkBudget.timed(AuctionWorkLimits.MAX_MATCH_OPERATIONS_PER_PUMP,
                         AuctionWorkLimits.MAX_MAINTENANCE_NANOS),
                 AuctionWorkLimits.MAX_MATCH_FILLS_PER_PUMP);
@@ -510,7 +509,7 @@ public final class AuctionService {
                     : new Outcome(Result.SUCCESS, "Мгновенная операция уже завершена", fresh, placed.trades());
         }
         if (!fresh.isActive()) {
-            database.inTransaction(c -> { iocOrders.remove(c, orderId); return null; });
+            removeImmediateTracking(orderId);
             return new Outcome(Result.SUCCESS, "Мгновенная операция завершена", fresh, placed.trades());
         }
         if (fresh.processingState() != OrderProcessingState.NONE) {
@@ -521,7 +520,7 @@ public final class AuctionService {
         Outcome cancelled = cancel(actorId, orderId, "immediate-or-cancel remainder");
         Order done = database.query(c -> orders.findById(c, orderId).orElse(fresh));
         if (!done.isActive()) {
-            database.inTransaction(c -> { iocOrders.remove(c, orderId); return null; });
+            removeImmediateTracking(orderId);
         }
         if (!cancelled.isSuccess() && done.isActive()) {
             return new Outcome(Result.ACCEPTED_PENDING,
@@ -538,8 +537,9 @@ public final class AuctionService {
         if (!current.isActive() || current.processingState() != OrderProcessingState.NONE) {
             return new Outcome(placed.status(), placed.message(), current, placed.trades());
         }
-        MatchingReport extra = pumpMatching(WorkBudget.operations(MAX_IMMEDIATE_MATCH_FILLS),
-                MAX_IMMEDIATE_MATCH_FILLS);
+        MatchingReport extra = pumpImmediateOrder(current.orderId(),
+                WorkBudget.operations(AuctionWorkLimits.MAX_IMMEDIATE_MATCH_FILLS),
+                AuctionWorkLimits.MAX_IMMEDIATE_MATCH_FILLS);
         java.util.LinkedHashMap<UUID, Trade> own = new java.util.LinkedHashMap<>();
         for (Trade trade : placed.trades()) own.put(trade.tradeId(), trade);
         for (Trade trade : extra.trades()) {
@@ -552,22 +552,31 @@ public final class AuctionService {
     }
 
     /** Bounded crash/recovery cleanup for durable IOC markers. */
-    public int finishImmediateRemainders(int limit) {
+    public int finishImmediateRemainders(WorkBudget budget, int limit) {
         int completed = 0;
         for (UUID orderId : database.query(c -> iocOrders.oldest(c, limit))) {
+            if (!budget.tryAcquire()) break;
             Order order = database.query(c -> orders.findById(c, orderId).orElse(null));
             if (order == null || !order.isActive()) {
-                database.inTransaction(c -> { iocOrders.remove(c, orderId); return null; });
+                removeImmediateTracking(orderId);
                 completed++;
             } else if (order.processingState() == OrderProcessingState.NONE) {
                 Outcome outcome = cancel(order.ownerUuid(), orderId, "recovered immediate remainder");
                 if (outcome.isSuccess()) {
-                    database.inTransaction(c -> { iocOrders.remove(c, orderId); return null; });
+                    removeImmediateTracking(orderId);
                     completed++;
                 }
             }
         }
         return completed;
+    }
+
+    private void removeImmediateTracking(UUID orderId) {
+        database.inTransaction(c -> {
+            iocOrders.remove(c, orderId);
+            matchWork.deleteByOrderId(c, orderId);
+            return null;
+        });
     }
 
     // ================================================================ fill-сага
@@ -649,6 +658,40 @@ public final class AuctionService {
             });
         }
         boolean backlog = database.query(matchWork::hasAny);
+        return new MatchingReport(List.copyOf(completed), attempted, backlog);
+    }
+
+    /** Match only one synchronous IOC order; global queue ordering cannot consume its budget. */
+    public MatchingReport pumpImmediateOrder(UUID orderId, WorkBudget budget, int maxFills) {
+        List<Trade> completed = new ArrayList<>();
+        int attempted = 0;
+        int fillLimit = Math.min(Math.max(0, maxFills),
+                AuctionWorkLimits.MAX_IMMEDIATE_MATCH_FILLS);
+        while (completed.size() < fillLimit && budget.tryAcquire()) {
+            attempted++;
+            Order incoming = database.query(c -> orders.findById(c, orderId).orElse(null));
+            if (incoming == null || !incoming.isActive()) {
+                database.inTransaction(c -> { matchWork.deleteByOrderId(c, orderId); return null; });
+                break;
+            }
+            if (incoming.processingState() != OrderProcessingState.NONE) break;
+            Order counterpart = database.query(c -> orders.bestCounterpart(c, incoming.marketKey(),
+                    incoming.side(), incoming.pricePerUnit(), incoming.ownerUuid(),
+                    settings.allowSelfPurchase(), incoming.orderId()).orElse(null));
+            if (counterpart == null) break;
+            int chunk = Math.min(incoming.remainingQuantity(), counterpart.remainingQuantity());
+            Order buy = incoming.side() == OrderSide.BUY ? incoming : counterpart;
+            Order sell = incoming.side() == OrderSide.SELL ? incoming : counterpart;
+            Trade fill = executeFill(buy, sell, chunk, counterpart.pricePerUnit(),
+                    counterpart.side(), now());
+            if (fill == null) break;
+            completed.add(fill);
+        }
+        Order remaining = database.query(c -> orders.findById(c, orderId).orElse(null));
+        boolean backlog = remaining != null && remaining.isActive();
+        if (!backlog) {
+            database.inTransaction(c -> { matchWork.deleteByOrderId(c, orderId); return null; });
+        }
         return new MatchingReport(List.copyOf(completed), attempted, backlog);
     }
 

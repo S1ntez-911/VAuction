@@ -110,6 +110,27 @@ class ServerOnlyGuiStructureTest {
     }
 
     @Test
+    void immediateExecutionIsTargetedAndCleanupSharesTickBudget() throws Exception {
+        String service = source("com/valorcraft/vauction/application/AuctionService.java");
+        String limits = source("com/valorcraft/vauction/application/AuctionWorkLimits.java");
+        String events = source("com/valorcraft/vauction/bootstrap/ServerEvents.java");
+        int targetedStart = service.indexOf("private Outcome continueImmediateMatching");
+        int cleanupStart = service.indexOf("public int finishImmediateRemainders", targetedStart);
+        String targeted = service.substring(targetedStart, cleanupStart);
+        assertTrue(targeted.contains("pumpImmediateOrder"));
+        assertFalse(targeted.contains("pumpMatching("));
+        assertTrue(limits.contains("MAX_IMMEDIATE_MATCH_FILLS = 32"));
+        assertTrue(events.contains("finishImmediateRemainders(budget, 16)"));
+    }
+
+    @Test
+    void emptyHandHomeCardUsesVisibleVanillaItem() throws Exception {
+        String controller = source("com/valorcraft/vauction/gui/MarketController.java");
+        assertTrue(controller.contains("new ItemStack(Items.PAPER), \"Предмет в руке\""));
+        assertFalse(controller.contains("new ItemStack(Items.AIR), \"Предмет в руке\""));
+    }
+
+    @Test
     void conservativePriceWarningNeedsTwoReferencesAndNeverChangesPrice() {
         MarketSummary normal = new MarketSummary("key", "Copper", 31, 33, 10, 10, 32);
         assertFalse(MarketController.shouldWarnPrice(OrderSide.BUY, 35, normal));

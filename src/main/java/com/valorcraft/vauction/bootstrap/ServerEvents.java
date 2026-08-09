@@ -71,7 +71,7 @@ public final class ServerEvents {
                     AuctionWorkLimits.MAX_MATCH_FILLS_PER_PUMP);
         }
         if (!budget.exhausted()) {
-            VAuctionCore.instance().auctionService().finishImmediateRemainders(16);
+            VAuctionCore.instance().auctionService().finishImmediateRemainders(budget, 16);
         }
         VAuctionCore.instance().notificationService().tick();
         if (workBudgetWarnCooldown > 0) {

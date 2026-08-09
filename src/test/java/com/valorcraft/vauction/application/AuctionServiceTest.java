@@ -5,6 +5,7 @@ import com.valorcraft.vauction.domain.delivery.AuctionDelivery;
 import com.valorcraft.vauction.domain.delivery.DeliveryState;
 import com.valorcraft.vauction.domain.order.Order;
 import com.valorcraft.vauction.domain.order.OrderProcessingState;
+import com.valorcraft.vauction.domain.order.OrderSide;
 import com.valorcraft.vauction.domain.order.OrderStatus;
 import com.valorcraft.vauction.domain.trade.TradeState;
 import com.valorcraft.vauction.economy.EconomyGateway;
@@ -13,6 +14,7 @@ import com.valorcraft.vauction.item.ItemStackCodec;
 import com.valorcraft.vauction.persistence.DatabaseManager;
 import com.valorcraft.vauction.persistence.DeliveryRepository;
 import com.valorcraft.vauction.persistence.MatchWorkRepository;
+import com.valorcraft.vauction.persistence.IocOrderRepository;
 import com.valorcraft.vauction.persistence.OperationRepository;
 import com.valorcraft.vauction.persistence.OrderRepository;
 import com.valorcraft.vauction.persistence.TradeRepository;
@@ -135,6 +137,171 @@ class AuctionServiceTest {
         assertEquals(32, quote.fillableQuantity());
         assertTrue(quote.insufficientLiquidity());
         assertEquals(1, quote.levels().size(), "same-price makers are grouped for player display");
+    }
+
+    @Test
+    void thirtyTwoMakerQuoteEqualsTargetedExecutionWithoutDanglingTracking() {
+        ItemStack copper = new ItemStack(Items.COPPER_INGOT);
+        UUID buyer = UUID.randomUUID();
+        for (int i = 0; i < AuctionWorkLimits.MAX_IMMEDIATE_MATCH_FILLS; i++) {
+            service.createSellOrder(UUID.randomUUID(), copper, 30, 1);
+        }
+        economy.balances.put(buyer, 10_000L);
+        AuctionReadService reads = new AuctionReadService(db, orders, deliveries, codec,
+                new ExactItemMarketKeyStrategy(codec));
+        AuctionReadService.ImmediateQuote quote = reads.quoteBuyNow(copper, 32, buyer);
+        UUID requestId = UUID.randomUUID();
+
+        AuctionService.Outcome result = service.executeBuyNow(buyer, copper,
+                quote.worstExecutionPrice(), quote.fillableQuantity(), requestId);
+
+        assertEquals(32, quote.fillableQuantity());
+        assertEquals(32, result.filledQuantity());
+        assertEquals(32, result.trades().size());
+        assertTrue(result.trades().stream().allMatch(t -> t.state() == TradeState.SETTLED));
+        assertEquals(OrderStatus.FILLED, result.order().status());
+        assertEquals(32, db.query(c -> deliveries.listByState(c, DeliveryState.CLAIMABLE)).stream()
+                .filter(delivery -> delivery.playerUuid().equals(buyer))
+                .mapToInt(delivery -> delivery.item().quantity()).sum());
+        assertEquals(false, db.query(c -> new IocOrderRepository().exists(c, requestId)));
+        assertTrue(db.query(c -> new MatchWorkRepository().findByOrderId(c, requestId)).isEmpty());
+    }
+
+    @Test
+    void unrelatedGlobalMatchBacklogDoesNotReduceImmediateFillCount() {
+        ItemStack copper = new ItemStack(Items.COPPER_INGOT);
+        ItemStack iron = new ItemStack(Items.IRON_INGOT);
+        for (int i = 0; i < 32; i++) {
+            service.createSellOrder(UUID.randomUUID(), copper, 30, 1);
+        }
+        List<UUID> unrelated = new ArrayList<>();
+        for (int i = 0; i < 40; i++) {
+            unrelated.add(service.createSellOrder(UUID.randomUUID(), iron, 99, 1)
+                    .order().orderId());
+        }
+        MatchWorkRepository queue = new MatchWorkRepository();
+        db.inTransaction(c -> {
+            for (UUID orderId : unrelated) queue.enqueue(c, orderId, 0);
+            return null;
+        });
+        assertEquals(40, db.query(queue::count));
+        UUID buyer = UUID.randomUUID();
+        economy.balances.put(buyer, 10_000L);
+
+        AuctionService.Outcome result = service.executeBuyNow(buyer, copper, 30, 32,
+                UUID.randomUUID());
+
+        assertEquals(32, result.filledQuantity());
+        assertEquals(OrderStatus.FILLED, result.order().status());
+        assertEquals(40, db.query(queue::count), "targeted IOC must not poll unrelated work");
+    }
+
+    @Test
+    void immediateQuoteAndExecutionBothExcludeOwnLiquidity() {
+        ItemStack copper = new ItemStack(Items.COPPER_INGOT);
+        UUID actor = UUID.randomUUID();
+        UUID other = UUID.randomUUID();
+        AuctionService.Outcome own = service.createSellOrder(actor, copper, 30, 10);
+        service.createSellOrder(other, copper, 31, 20);
+        economy.balances.put(actor, 10_000L);
+        AuctionReadService reads = new AuctionReadService(db, orders, deliveries, codec,
+                new ExactItemMarketKeyStrategy(codec));
+
+        AuctionReadService.ImmediateQuote quote = reads.quoteBuyNow(copper, 30, actor);
+        AuctionService.Outcome result = service.executeBuyNow(actor, copper,
+                quote.worstExecutionPrice(), quote.fillableQuantity(), UUID.randomUUID());
+
+        assertEquals(20, quote.fillableQuantity());
+        assertEquals(20, result.filledQuantity());
+        assertEquals(OrderStatus.ACTIVE, db.query(c -> orders.findById(c, own.order().orderId()))
+                .orElseThrow().status());
+    }
+
+    @Test
+    void processingMakerIsExcludedFromBothImmediateQuoteAndExecution() {
+        ItemStack copper = new ItemStack(Items.COPPER_INGOT);
+        AuctionService.Outcome lockedMaker = service.createSellOrder(
+                UUID.randomUUID(), copper, 30, 10);
+        AuctionService.Outcome availableMaker = service.createSellOrder(
+                UUID.randomUUID(), copper, 31, 20);
+        Order before = db.query(c -> orders.findById(c, lockedMaker.order().orderId())).orElseThrow();
+        db.inTransaction(c -> orders.applyState(c, before,
+                before.withProcessingState(OrderProcessingState.FILL, System.currentTimeMillis())));
+        UUID buyer = UUID.randomUUID();
+        economy.balances.put(buyer, 10_000L);
+        AuctionReadService reads = new AuctionReadService(db, orders, deliveries, codec,
+                new ExactItemMarketKeyStrategy(codec));
+
+        AuctionReadService.ImmediateQuote quote = reads.quoteBuyNow(copper, 30, buyer);
+        AuctionService.Outcome result = service.executeBuyNow(buyer, copper,
+                quote.worstExecutionPrice(), quote.fillableQuantity(), UUID.randomUUID());
+
+        assertEquals(20, quote.fillableQuantity());
+        assertEquals(31, quote.worstExecutionPrice());
+        assertEquals(20, result.filledQuantity());
+        assertTrue(result.trades().stream().allMatch(t -> t.sellOrderId()
+                .equals(availableMaker.order().orderId())));
+        assertEquals(OrderProcessingState.FILL, db.query(c ->
+                orders.findById(c, lockedMaker.order().orderId())).orElseThrow().processingState());
+    }
+
+    @Test
+    void pendingImmediateFillRecoversThenCancelsRemainderExactlyOnce() {
+        ItemStack copper = new ItemStack(Items.COPPER_INGOT);
+        UUID seller = UUID.randomUUID();
+        UUID buyer = UUID.randomUUID();
+        service.createSellOrder(seller, copper, 10, 5);
+        economy.balances.put(buyer, 1_000L);
+        economy.transientSettleFailures = 1;
+        UUID requestId = UUID.randomUUID();
+
+        AuctionService.Outcome pending = service.executeBuyNow(buyer, copper, 10, 10, requestId);
+
+        assertEquals(AuctionService.Result.ACCEPTED_PENDING, pending.status());
+        assertEquals(OrderProcessingState.FILL, db.query(c -> orders.findById(c, requestId))
+                .orElseThrow().processingState());
+        assertEquals(true, db.query(c -> new IocOrderRepository().exists(c, requestId)));
+        RecoveryService recovery = new RecoveryService(db, orders, trades, deliveries, economy, service);
+        assertEquals(1, recovery.scan().fillsFinished());
+        long paidOnce = economy.getBalance(seller);
+
+        assertEquals(1, service.finishImmediateRemainders(WorkBudget.operations(1), 16));
+        Order done = db.query(c -> orders.findById(c, requestId)).orElseThrow();
+        assertEquals(OrderStatus.CANCELLED, done.status());
+        assertEquals(5, done.filledQuantity());
+        assertEquals(1, db.query(trades::findAll).size());
+        assertEquals(950L, economy.getBalance(buyer));
+        assertEquals(false, db.query(c -> new IocOrderRepository().exists(c, requestId)));
+        assertTrue(db.query(c -> new MatchWorkRepository().findByOrderId(c, requestId)).isEmpty());
+        recovery.scan();
+        assertEquals(paidOnce, economy.getBalance(seller), "recovery must not duplicate credits");
+    }
+
+    @Test
+    void immediateCleanupObeysSharedBudgetAndContinuesWithoutStarvation() {
+        ItemStack copper = new ItemStack(Items.COPPER_INGOT);
+        IocOrderRepository ioc = new IocOrderRepository();
+        List<Order> candidates = new ArrayList<>();
+        for (int i = 0; i < 100; i++) {
+            candidates.add(service.createSellOrder(UUID.randomUUID(), copper, 10, 1).order());
+        }
+        db.inTransaction(c -> {
+            for (Order order : candidates) ioc.mark(c, order.orderId(), order.createdAt());
+            return null;
+        });
+
+        assertEquals(0, service.finishImmediateRemainders(WorkBudget.operations(0), 16));
+        assertEquals(0, service.finishImmediateRemainders(WorkBudget.timed(5, 0), 16));
+        assertEquals(100, db.query(c -> ioc.oldest(c, 200)).size());
+        assertEquals(5, service.finishImmediateRemainders(WorkBudget.operations(5), 16));
+        assertEquals(95, db.query(c -> ioc.oldest(c, 200)).size());
+        int completed = 5;
+        int slices = 1;
+        while (!db.query(c -> ioc.oldest(c, 1)).isEmpty()) {
+            completed += service.finishImmediateRemainders(WorkBudget.operations(5), 16);
+            assertTrue(slices++ < 25, "IOC cleanup continuation starved");
+        }
+        assertEquals(100, completed);
     }
 
     @Test
