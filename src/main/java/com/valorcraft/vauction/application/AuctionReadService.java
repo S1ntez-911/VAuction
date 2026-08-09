@@ -19,6 +19,8 @@ import net.minecraft.world.item.ItemStack;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.UUID;
+import java.math.BigDecimal;
+import java.math.RoundingMode;
 
 /** Bounded, GUI-oriented reads. Mutations remain exclusively in {@link AuctionService}. */
 public final class AuctionReadService {
@@ -31,6 +33,22 @@ public final class AuctionReadService {
         public MarketView {
             sells = List.copyOf(sells);
             buys = List.copyOf(buys);
+        }
+    }
+
+    public record QuoteLevel(long pricePerUnit, int quantity) {}
+
+    /** Immutable, read-only preview. It never reserves funds or removes items. */
+    public record ImmediateQuote(OrderSide side, int requestedQuantity, int fillableQuantity,
+                                 List<QuoteLevel> levels, long expectedTotal,
+                                 long worstExecutionPrice, BigDecimal averagePrice,
+                                 boolean insufficientLiquidity) {
+        public ImmediateQuote {
+            levels = List.copyOf(levels);
+        }
+
+        public boolean executable() {
+            return fillableQuantity > 0 && worstExecutionPrice > 0;
         }
     }
 
@@ -79,6 +97,61 @@ public final class AuctionReadService {
                     orders.bookLevels(c, key, OrderSide.SELL, BOOK_DEPTH),
                     orders.bookLevels(c, key, OrderSide.BUY, BOOK_DEPTH));
         });
+    }
+
+    public ImmediateQuote quoteBuyNow(ItemStack unit, int quantity) {
+        return quote(unit, quantity, OrderSide.BUY, null);
+    }
+
+    public ImmediateQuote quoteSellNow(ItemStack unit, int quantity) {
+        return quote(unit, quantity, OrderSide.SELL, null);
+    }
+
+    public ImmediateQuote quoteBuyNow(ItemStack unit, int quantity, UUID actor) {
+        return quote(unit, quantity, OrderSide.BUY, actor);
+    }
+
+    public ImmediateQuote quoteSellNow(ItemStack unit, int quantity, UUID actor) {
+        return quote(unit, quantity, OrderSide.SELL, actor);
+    }
+
+    private ImmediateQuote quote(ItemStack selectedUnit, int requestedQuantity, OrderSide side, UUID actor) {
+        int requested = Math.max(0, requestedQuantity);
+        String key = marketKey(selectedUnit);
+        if (key == null || requested == 0) {
+            return new ImmediateQuote(side, requested, 0, List.of(), 0, 0,
+                    BigDecimal.ZERO, requested > 0);
+        }
+        OrderSide liquiditySide = side == OrderSide.BUY ? OrderSide.SELL : OrderSide.BUY;
+        List<OrderBookLevel> book = database.query(c ->
+                orders.immediateLiquidity(c, key, liquiditySide, actor, 32));
+        List<QuoteLevel> used = new ArrayList<>();
+        int remaining = requested;
+        long total = 0;
+        long worst = 0;
+        for (OrderBookLevel level : book) {
+            if (remaining <= 0) break;
+            int take = (int) Math.min((long) remaining, level.quantity());
+            try {
+                total = Math.addExact(total, Math.multiplyExact(level.pricePerUnit(), (long) take));
+            } catch (ArithmeticException e) {
+                return new ImmediateQuote(side, requested, 0, List.of(), 0, 0,
+                        BigDecimal.ZERO, true);
+            }
+            if (!used.isEmpty() && used.get(used.size() - 1).pricePerUnit() == level.pricePerUnit()) {
+                QuoteLevel previous = used.remove(used.size() - 1);
+                used.add(new QuoteLevel(previous.pricePerUnit(), previous.quantity() + take));
+            } else {
+                used.add(new QuoteLevel(level.pricePerUnit(), take));
+            }
+            remaining -= take;
+            worst = level.pricePerUnit();
+        }
+        int fillable = requested - remaining;
+        BigDecimal average = fillable == 0 ? BigDecimal.ZERO
+                : BigDecimal.valueOf(total).divide(BigDecimal.valueOf(fillable), 2, RoundingMode.HALF_UP);
+        return new ImmediateQuote(side, requested, fillable, used, total, worst, average,
+                fillable < requested);
     }
 
     public Page<Order> playerOrders(UUID playerId, int requestedPage) {

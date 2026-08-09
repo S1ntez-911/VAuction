@@ -57,6 +57,7 @@ class AuctionServiceTest {
     private FakeEconomy economy;
     private FakeInventory inventory;
     private AuctionService service;
+    private ItemStackCodec codec;
 
     @BeforeEach
     void setUp() {
@@ -67,7 +68,7 @@ class AuctionServiceTest {
         trades = new TradeRepository();
         economy = new FakeEconomy();
         inventory = new FakeInventory();
-        ItemStackCodec codec = new ItemStackCodec(262_144, 2_097_152);
+        codec = new ItemStackCodec(262_144, 2_097_152);
         service = new AuctionService(db, orders, trades,
                 new OperationRepository(), deliveries, codec,
                 new ExactItemMarketKeyStrategy(codec), economy, inventory,
@@ -77,6 +78,130 @@ class AuctionServiceTest {
     @AfterEach
     void tearDown() {
         db.close();
+    }
+
+    @Test
+    void buyNowQuoteAndExecutionFillTwoLevelsWithoutRestingRemainder() {
+        ItemStack copper = new ItemStack(Items.COPPER_INGOT);
+        UUID sellerA = UUID.randomUUID();
+        UUID sellerB = UUID.randomUUID();
+        UUID buyer = UUID.randomUUID();
+        service.createSellOrder(sellerA, copper, 32, 64);
+        service.createSellOrder(sellerB, copper, 33, 64);
+        economy.balances.put(buyer, 10_000L);
+        AuctionReadService reads = new AuctionReadService(db, orders, deliveries, codec,
+                new ExactItemMarketKeyStrategy(codec));
+
+        AuctionReadService.ImmediateQuote quote = reads.quoteBuyNow(copper, 100);
+        AuctionService.Outcome result = service.executeBuyNow(buyer, copper,
+                quote.worstExecutionPrice(), quote.fillableQuantity(), UUID.randomUUID());
+
+        assertEquals(100, quote.fillableQuantity());
+        assertEquals(3236, quote.expectedTotal());
+        assertEquals(33, quote.worstExecutionPrice());
+        assertEquals(List.of(32L, 33L), result.trades().stream().map(t -> t.executionPrice()).toList());
+        assertEquals(List.of(64, 36), result.trades().stream().map(t -> t.quantity()).toList());
+        assertEquals(100, result.filledQuantity());
+        assertEquals(OrderStatus.FILLED, result.order().status());
+    }
+
+    @Test
+    void buyNowWithInsufficientOrChangedLiquidityPartiallyFillsAndCancelsRemainder() {
+        ItemStack iron = new ItemStack(Items.IRON_INGOT);
+        UUID seller = UUID.randomUUID();
+        UUID buyer = UUID.randomUUID();
+        service.createSellOrder(seller, iron, 33, 50);
+        economy.balances.put(buyer, 10_000L);
+
+        AuctionService.Outcome result = service.executeBuyNow(buyer, iron, 33, 100, UUID.randomUUID());
+
+        assertEquals(50, result.filledQuantity());
+        assertTrue(result.trades().stream().allMatch(t -> t.executionPrice() <= 33));
+        assertEquals(OrderStatus.CANCELLED, result.order().status());
+        assertTrue(service.playerOrders(buyer).isEmpty(), "IOC must leave no active order");
+    }
+
+    @Test
+    void immediateQuoteNeverPromisesMoreMakerOrdersThanBoundedExecutionCanFill() {
+        ItemStack iron = new ItemStack(Items.IRON_INGOT);
+        for (int i = 0; i < 40; i++) {
+            service.createSellOrder(UUID.randomUUID(), iron, 30, 1);
+        }
+        AuctionReadService reads = new AuctionReadService(db, orders, deliveries, codec,
+                new ExactItemMarketKeyStrategy(codec));
+
+        AuctionReadService.ImmediateQuote quote = reads.quoteBuyNow(iron, 40);
+
+        assertEquals(32, quote.fillableQuantity());
+        assertTrue(quote.insufficientLiquidity());
+        assertEquals(1, quote.levels().size(), "same-price makers are grouped for player display");
+    }
+
+    @Test
+    void buyNowKeepsConfirmedCeilingWhenBookChangesAfterQuote() {
+        ItemStack copper = new ItemStack(Items.COPPER_INGOT);
+        UUID sellerA = UUID.randomUUID();
+        UUID sellerB = UUID.randomUUID();
+        AuctionService.Outcome first = service.createSellOrder(sellerA, copper, 32, 50);
+        AuctionService.Outcome disappearing = service.createSellOrder(sellerB, copper, 33, 50);
+        AuctionReadService reads = new AuctionReadService(db, orders, deliveries, codec,
+                new ExactItemMarketKeyStrategy(codec));
+        AuctionReadService.ImmediateQuote quote = reads.quoteBuyNow(copper, 100);
+        service.cancel(sellerB, disappearing.order().orderId(), "test book change");
+        UUID buyer = UUID.randomUUID();
+        economy.balances.put(buyer, 10_000L);
+
+        AuctionService.Outcome result = service.executeBuyNow(buyer, copper,
+                quote.worstExecutionPrice(), quote.fillableQuantity(), UUID.randomUUID());
+
+        assertEquals(33, quote.worstExecutionPrice());
+        assertEquals(50, result.filledQuantity());
+        assertTrue(result.trades().stream().allMatch(t -> t.executionPrice() <= 33));
+        assertEquals(OrderStatus.CANCELLED, result.order().status());
+        assertEquals(OrderStatus.FILLED, db.query(c -> orders.findById(c, first.order().orderId()))
+                .orElseThrow().status());
+    }
+
+    @Test
+    void sellNowUsesConfirmedFloorCreditsCommissionAndLeavesNoRestingRemainder() {
+        ItemStack copper = new ItemStack(Items.COPPER_INGOT);
+        UUID buyerA = UUID.randomUUID();
+        UUID buyerB = UUID.randomUUID();
+        UUID seller = UUID.randomUUID();
+        economy.balances.put(buyerA, 10_000L);
+        economy.balances.put(buyerB, 10_000L);
+        service.createBuyOrder(buyerA, copper, 31, 50);
+        service.createBuyOrder(buyerB, copper, 30, 100);
+        inventory.available = 100;
+
+        AuctionService.Outcome result = service.executeSellNow(seller, copper, 30, 100,
+                UUID.randomUUID());
+
+        assertEquals(List.of(31L, 30L), result.trades().stream().map(t -> t.executionPrice()).toList());
+        assertEquals(List.of(50, 50), result.trades().stream().map(t -> t.quantity()).toList());
+        assertTrue(result.trades().stream().allMatch(t -> t.executionPrice() >= 30));
+        long expectedNet = result.trades().stream().mapToLong(t -> t.sellerNetMinor()).sum();
+        assertEquals(expectedNet, economy.balances.getOrDefault(seller, 0L));
+        assertEquals(OrderStatus.FILLED, result.order().status());
+        assertTrue(service.playerOrders(seller).isEmpty());
+    }
+
+    @Test
+    void twentyRapidSettledFillsReachPostSettlementHookExactlyOnceEach() {
+        ItemStack copper = new ItemStack(Items.COPPER_INGOT);
+        UUID buyer = UUID.randomUUID();
+        economy.balances.put(buyer, 100_000L);
+        List<com.valorcraft.vauction.domain.trade.Trade> notifications = new ArrayList<>();
+        service.setSettledTradeListener(notifications::add);
+        for (int i = 0; i < 20; i++) {
+            service.createSellOrder(UUID.randomUUID(), copper, 20 + i, 1);
+        }
+        service.createBuyOrder(buyer, copper, 100, 20);
+        for (int i = 0; i < 3; i++) service.pumpMatching(WorkBudget.operations(64), 64);
+
+        assertEquals(20, notifications.size());
+        assertEquals(20, notifications.stream().map(t -> t.tradeId()).distinct().count());
+        assertTrue(notifications.stream().allMatch(t -> t.state() == TradeState.SETTLED));
     }
 
     @Test

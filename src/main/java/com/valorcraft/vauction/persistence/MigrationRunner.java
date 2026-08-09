@@ -42,7 +42,8 @@ public final class MigrationRunner {
             "V003__unified_market.sql",
             "V004__order_processing_state.sql",
             "V005__bounded_work.sql",
-            "V006__gui_read_indexes.sql"
+            "V006__gui_read_indexes.sql",
+            "V007__player_experience.sql"
     };
 
     private static final Logger LOGGER = LogManager.getLogger("VAuction");

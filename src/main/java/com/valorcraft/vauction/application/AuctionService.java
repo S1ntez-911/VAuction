@@ -24,6 +24,7 @@ import com.valorcraft.vauction.persistence.DatabaseManager;
 import com.valorcraft.vauction.persistence.DatabaseException;
 import com.valorcraft.vauction.persistence.DeliveryRepository;
 import com.valorcraft.vauction.persistence.MatchWorkRepository;
+import com.valorcraft.vauction.persistence.IocOrderRepository;
 import com.valorcraft.vauction.persistence.OperationRepository;
 import com.valorcraft.vauction.persistence.OrderRepository;
 import com.valorcraft.vauction.persistence.TradeRepository;
@@ -38,6 +39,7 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.Optional;
 import java.util.UUID;
+import java.util.function.Consumer;
 
 /**
  * Бизнес-логика ЕДИНОГО order-book рынка VAuction.
@@ -75,6 +77,7 @@ public final class AuctionService {
     private static final int MAX_DELIVERY_CHUNK = 64;
     private static final long MILLIS_PER_DAY = 86_400_000L;
     private static final long MATCH_RETRY_DELAY_MILLIS = 1_000L;
+    private static final int MAX_IMMEDIATE_MATCH_FILLS = 32;
 
     public enum Result {
         SUCCESS, ACCEPTED_PENDING, NOT_A_PLAYER, ORDER_NOT_FOUND, NOT_YOUR_ORDER, SELF_TRADE,
@@ -114,11 +117,13 @@ public final class AuctionService {
     private final OperationRepository operations;
     private final DeliveryRepository deliveries;
     private final MatchWorkRepository matchWork = new MatchWorkRepository();
+    private final IocOrderRepository iocOrders = new IocOrderRepository();
     private final ItemStackCodec codec;
     private final MarketKeyStrategy marketKeyFactory;
     private final EconomyGateway economy;
     private final InventoryOps inventory;
     private final AuctionSettings settings;
+    private volatile Consumer<Trade> settledTradeListener = ignored -> {};
 
     public AuctionService(DatabaseManager database, OrderRepository orders, TradeRepository trades,
                           OperationRepository operations, DeliveryRepository deliveries,
@@ -134,6 +139,10 @@ public final class AuctionService {
         this.economy = economy;
         this.inventory = inventory;
         this.settings = settings;
+    }
+
+    public void setSettledTradeListener(Consumer<Trade> listener) {
+        settledTradeListener = listener == null ? ignored -> {} : listener;
     }
 
     // ================================================================ вход
@@ -198,6 +207,19 @@ public final class AuctionService {
     /** Application-level variant used by non-menu entry points and deterministic tests. */
     public Outcome createSellOrderFromInventory(UUID sellerId, ItemStack exactUnit,
                                                 long pricePerUnit, int quantity, UUID requestId) {
+        return createSellOrderFromInventory(sellerId, exactUnit, pricePerUnit, quantity, requestId, false);
+    }
+
+    public Outcome executeSellNow(UUID sellerId, ItemStack exactUnit, long minimumPrice,
+                                  int quantity, UUID requestId) {
+        Outcome placed = createSellOrderFromInventory(sellerId, exactUnit, minimumPrice,
+                quantity, requestId, true);
+        return finishImmediate(sellerId, continueImmediateMatching(placed));
+    }
+
+    private Outcome createSellOrderFromInventory(UUID sellerId, ItemStack exactUnit,
+                                                 long pricePerUnit, int quantity, UUID requestId,
+                                                 boolean immediate) {
         if (sellerId == null) {
             return Outcome.fail(Result.NOT_A_PLAYER, "Продавец не определён");
         }
@@ -216,7 +238,7 @@ public final class AuctionService {
             return Outcome.fail(Result.INSUFFICIENT_ITEMS,
                     "Недостаточно точных предметов в инвентаре (доступно " + available + ")");
         }
-        return placeSell(sellerId, unit, pricePerUnit, quantity, true, requestId);
+        return placeSell(sellerId, unit, pricePerUnit, quantity, true, requestId, immediate);
     }
 
     public int availableCount(UUID playerId, ItemStack exactUnit) {
@@ -233,6 +255,17 @@ public final class AuctionService {
     /** GUI-safe overload: repeated confirmation returns the already accepted order. */
     public Outcome createBuyOrder(UUID buyerId, ItemStack unit, long pricePerUnit, int quantity,
                                   UUID requestId) {
+        return createBuyOrder(buyerId, unit, pricePerUnit, quantity, requestId, false);
+    }
+
+    public Outcome executeBuyNow(UUID buyerId, ItemStack unit, long maximumPrice,
+                                 int quantity, UUID requestId) {
+        Outcome placed = createBuyOrder(buyerId, unit, maximumPrice, quantity, requestId, true);
+        return finishImmediate(buyerId, continueImmediateMatching(placed));
+    }
+
+    private Outcome createBuyOrder(UUID buyerId, ItemStack unit, long pricePerUnit, int quantity,
+                                   UUID requestId, boolean immediate) {
         if (buyerId == null) {
             return Outcome.fail(Result.NOT_A_PLAYER, "Покупатель не определён");
         }
@@ -276,13 +309,14 @@ public final class AuctionService {
         } catch (ItemCodecException e) {
             return Outcome.fail(Result.BLACKLISTED, "Предмет не удалось закодировать");
         }
-        return placeBuy(buyerId, unit, unitSnapshot, pricePerUnit, quantity, total, requestId);
+        return placeBuy(buyerId, unit, unitSnapshot, pricePerUnit, quantity, total, requestId, immediate);
     }
 
     // ================================================================ размещение
 
     private Outcome placeBuy(UUID buyerId, ItemStack unit, ItemSnapshot unitSnapshot,
-                             long pricePerUnit, int quantity, long total, UUID requestId) {
+                             long pricePerUnit, int quantity, long total, UUID requestId,
+                             boolean immediate) {
         String key = marketKeyOf(unit);
         if (key == null) {
             return Outcome.fail(Result.BLACKLISTED, "Предмет не допустим на рынке");
@@ -306,6 +340,7 @@ public final class AuctionService {
             order = created;
             database.inTransaction(conn -> {
                 orders.insert(conn, created);
+                if (immediate) iocOrders.mark(conn, orderId, now);
                 matchWork.registerOrder(conn, orderId);
                 operations.insert(conn, operationEntry(OperationType.CREATE_BUY_ORDER,
                                 "op:create-buy:" + orderId, orderId, buyerId,
@@ -358,11 +393,16 @@ public final class AuctionService {
 
     private Outcome placeSell(UUID sellerId, ItemStack unit, long pricePerUnit, int quantity,
                               boolean lockInventory) {
-        return placeSell(sellerId, unit, pricePerUnit, quantity, lockInventory, UUID.randomUUID());
+        return placeSell(sellerId, unit, pricePerUnit, quantity, lockInventory, UUID.randomUUID(), false);
     }
 
     private Outcome placeSell(UUID sellerId, ItemStack unit, long pricePerUnit, int quantity,
                               boolean lockInventory, UUID requestId) {
+        return placeSell(sellerId, unit, pricePerUnit, quantity, lockInventory, requestId, false);
+    }
+
+    private Outcome placeSell(UUID sellerId, ItemStack unit, long pricePerUnit, int quantity,
+                              boolean lockInventory, UUID requestId, boolean immediate) {
         if (quantity <= 0) {
             return Outcome.fail(Result.INVALID_QUANTITY, "Количество должно быть положительным");
         }
@@ -402,6 +442,7 @@ public final class AuctionService {
             order = created;
             database.inTransaction(conn -> {
                 orders.insert(conn, created);
+                if (immediate) iocOrders.mark(conn, orderId, now);
                 matchWork.registerOrder(conn, orderId);
                 operations.insert(conn, operationEntry(OperationType.CREATE_SELL_ORDER,
                                 "op:create-sell:" + orderId, orderId, sellerId,
@@ -452,6 +493,81 @@ public final class AuctionService {
         Order refreshed = database.query(c -> orders.findById(c, orderId).orElse(null));
         Order finalOrder = refreshed == null ? order : refreshed;
         return new Outcome(Result.SUCCESS, "Ордер размещён: " + orderId, finalOrder, fills);
+    }
+
+    /**
+     * Close the unfilled remainder of a marketable limit order. BUY escrow is
+     * released and SELL custody is returned through the existing cancel path.
+     */
+    private Outcome finishImmediate(UUID actorId, Outcome placed) {
+        if (placed.order() == null) return placed;
+        UUID orderId = placed.order().orderId();
+        Order fresh = database.query(c -> orders.findById(c, orderId).orElse(placed.order()));
+        boolean marked = database.query(c -> iocOrders.exists(c, orderId));
+        if (!marked) {
+            return fresh.isActive()
+                    ? Outcome.fail(Result.DATABASE_FAILED, "Ключ уже принадлежит обычной заявке")
+                    : new Outcome(Result.SUCCESS, "Мгновенная операция уже завершена", fresh, placed.trades());
+        }
+        if (!fresh.isActive()) {
+            database.inTransaction(c -> { iocOrders.remove(c, orderId); return null; });
+            return new Outcome(Result.SUCCESS, "Мгновенная операция завершена", fresh, placed.trades());
+        }
+        if (fresh.processingState() != OrderProcessingState.NONE) {
+            return new Outcome(Result.ACCEPTED_PENDING,
+                    "Операция принята; безопасное закрытие остатка продолжит recovery",
+                    fresh, placed.trades());
+        }
+        Outcome cancelled = cancel(actorId, orderId, "immediate-or-cancel remainder");
+        Order done = database.query(c -> orders.findById(c, orderId).orElse(fresh));
+        if (!done.isActive()) {
+            database.inTransaction(c -> { iocOrders.remove(c, orderId); return null; });
+        }
+        if (!cancelled.isSuccess() && done.isActive()) {
+            return new Outcome(Result.ACCEPTED_PENDING,
+                    "Исполненная часть завершена; остаток будет безопасно закрыт",
+                    done, placed.trades());
+        }
+        return new Outcome(Result.SUCCESS, "Мгновенная операция завершена", done, placed.trades());
+    }
+
+    private Outcome continueImmediateMatching(Outcome placed) {
+        if (!placed.isSuccess() || placed.order() == null) return placed;
+        Order current = database.query(c -> orders.findById(c, placed.order().orderId())
+                .orElse(placed.order()));
+        if (!current.isActive() || current.processingState() != OrderProcessingState.NONE) {
+            return new Outcome(placed.status(), placed.message(), current, placed.trades());
+        }
+        MatchingReport extra = pumpMatching(WorkBudget.operations(MAX_IMMEDIATE_MATCH_FILLS),
+                MAX_IMMEDIATE_MATCH_FILLS);
+        java.util.LinkedHashMap<UUID, Trade> own = new java.util.LinkedHashMap<>();
+        for (Trade trade : placed.trades()) own.put(trade.tradeId(), trade);
+        for (Trade trade : extra.trades()) {
+            if (trade.buyOrderId().equals(current.orderId()) || trade.sellOrderId().equals(current.orderId())) {
+                own.put(trade.tradeId(), trade);
+            }
+        }
+        Order refreshed = database.query(c -> orders.findById(c, current.orderId()).orElse(current));
+        return new Outcome(placed.status(), placed.message(), refreshed, List.copyOf(own.values()));
+    }
+
+    /** Bounded crash/recovery cleanup for durable IOC markers. */
+    public int finishImmediateRemainders(int limit) {
+        int completed = 0;
+        for (UUID orderId : database.query(c -> iocOrders.oldest(c, limit))) {
+            Order order = database.query(c -> orders.findById(c, orderId).orElse(null));
+            if (order == null || !order.isActive()) {
+                database.inTransaction(c -> { iocOrders.remove(c, orderId); return null; });
+                completed++;
+            } else if (order.processingState() == OrderProcessingState.NONE) {
+                Outcome outcome = cancel(order.ownerUuid(), orderId, "recovered immediate remainder");
+                if (outcome.isSuccess()) {
+                    database.inTransaction(c -> { iocOrders.remove(c, orderId); return null; });
+                    completed++;
+                }
+            }
+        }
+        return completed;
     }
 
     // ================================================================ fill-сага
@@ -672,8 +788,9 @@ public final class AuctionService {
 
         // S4b: финальная фиксация (транзакция; повторимая)
         String committedRef = nextRef;
+        boolean newlySettled;
         try {
-            database.inTransaction(conn -> {
+            newlySettled = database.inTransaction(conn -> {
                 Order pendingOrder = orders.findById(conn, buyOrder.orderId()).orElse(buyOrder);
                 if (pendingOrder.processingState() == OrderProcessingState.FILL) {
                     Order finalized = pendingOrder.finalizeFill(nextEpoch, committedRef, now);
@@ -682,16 +799,24 @@ public final class AuctionService {
                     }
                 }
                 Trade current = trades.findById(conn, trade.tradeId()).orElse(trade);
-                trades.markSettled(conn, current, now);
+                boolean marked = trades.markSettled(conn, current, now);
                 insertClaimableDeliveries(conn, trade.buyerUuid(), "fill-" + trade.tradeId(),
                         DeliveryType.PURCHASED, sellOrder == null ? buyOrder.item() : sellOrder.item(),
                         chunk, now);
                 completeOp(conn, "fill-" + trade.tradeId());
-                return null;
+                return marked;
             });
         } catch (RuntimeException e) {
             LOGGER.warn("S4 фиксация failed (восстановимо recovery'ем): {}", e.getMessage());
             return false;
+        }
+        if (newlySettled) {
+            Trade settledTrade = database.query(c -> trades.findById(c, trade.tradeId()).orElse(trade));
+            try {
+                settledTradeListener.accept(settledTrade);
+            } catch (RuntimeException e) {
+                LOGGER.warn("post-settlement notification hook failed: {}", e.getMessage());
+            }
         }
         return true;
     }

@@ -301,6 +301,32 @@ public final class OrderRepository {
         }
     }
 
+    /** Individual makers for an immediate quote; capped by the execution fill budget. */
+    public List<OrderBookLevel> immediateLiquidity(Connection c, String marketKey, OrderSide side,
+                                                   UUID excludedOwner, int limit) {
+        String sql = "SELECT o.price_per_unit,o.remaining_quantity FROM auction_orders o "
+                + "JOIN auction_order_acceptance seq ON seq.order_id=o.order_id "
+                + "WHERE o.market_key=? AND o.side=? AND o.status='ACTIVE' "
+                + "AND o.processing_state='NONE' "
+                + (excludedOwner == null ? "" : "AND o.owner_uuid<>? ")
+                + "ORDER BY o.price_per_unit " + (side == OrderSide.BUY ? "DESC" : "ASC")
+                + ",seq.sequence LIMIT ?";
+        try (PreparedStatement ps = c.prepareStatement(sql)) {
+            int i = 1;
+            ps.setString(i++, marketKey);
+            ps.setString(i++, side.name());
+            if (excludedOwner != null) ps.setString(i++, excludedOwner.toString());
+            ps.setInt(i, Math.max(1, limit));
+            try (ResultSet rs = ps.executeQuery()) {
+                List<OrderBookLevel> out = new ArrayList<>();
+                while (rs.next()) out.add(new OrderBookLevel(rs.getLong(1), rs.getLong(2)));
+                return out;
+            }
+        } catch (SQLException e) {
+            throw new DatabaseException("immediate liquidity quote failed", e);
+        }
+    }
+
     /** Лучшая (минимальная) встречная SELL-цена, или 0, если нет. */
     public long bestPrice(Connection c, String marketKey, OrderSide side) {
         String sql = "SELECT price_per_unit FROM auction_orders "

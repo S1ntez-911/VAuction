@@ -1,6 +1,7 @@
 package com.valorcraft.vauction.gui;
 
 import com.valorcraft.vauction.domain.order.OrderSide;
+import com.valorcraft.vauction.application.AuctionReadService;
 import net.minecraft.world.item.ItemStack;
 import net.minecraft.world.SimpleContainer;
 
@@ -25,6 +26,8 @@ final class MarketSession {
     int containerId = -1;
     boolean transitioning;
     boolean executing;
+    boolean immediate;
+    AuctionReadService.ImmediateQuote quote;
     SimpleContainer contents;
     ServerChestMenu menu;
 

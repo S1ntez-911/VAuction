@@ -31,7 +31,19 @@ public final class MarketEvents {
     }
 
     @SubscribeEvent
+    public static void login(PlayerEvent.PlayerLoggedInEvent event) {
+        if (event.getEntity() instanceof ServerPlayer player
+                && com.valorcraft.vauction.bootstrap.VAuctionCore.instance().isRunning()) {
+            com.valorcraft.vauction.bootstrap.VAuctionCore.instance()
+                    .notificationService().playerLoggedIn(player);
+        }
+    }
+
+    @SubscribeEvent
     public static void stopping(ServerStoppingEvent event) {
         MarketController.instance().clear();
+        if (com.valorcraft.vauction.bootstrap.VAuctionCore.instance().isRunning()) {
+            com.valorcraft.vauction.bootstrap.VAuctionCore.instance().notificationService().clear();
+        }
     }
 }

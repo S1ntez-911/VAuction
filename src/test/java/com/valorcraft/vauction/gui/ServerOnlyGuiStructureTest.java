@@ -1,5 +1,7 @@
 package com.valorcraft.vauction.gui;
 
+import com.valorcraft.vauction.domain.market.MarketSummary;
+import com.valorcraft.vauction.domain.order.OrderSide;
 import org.junit.jupiter.api.Test;
 
 import java.nio.charset.StandardCharsets;
@@ -7,6 +9,7 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 
 import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 class ServerOnlyGuiStructureTest {
@@ -81,5 +84,39 @@ class ServerOnlyGuiStructureTest {
         int renderEditor = controller.indexOf("private void renderEditor");
         String body = controller.substring(beginOrder, renderEditor);
         assertFalse(body.contains("renderPicker"), "known exact market must open the sell editor directly");
+    }
+
+    @Test
+    void playerHubExposesImmediateAndLimitFlowsWithoutFakePrices() throws Exception {
+        String controller = source("com/valorcraft/vauction/gui/MarketController.java");
+        String service = source("com/valorcraft/vauction/application/AuctionService.java");
+        assertTrue(controller.contains("Купить сейчас"));
+        assertTrue(controller.contains("Продать сейчас"));
+        assertTrue(controller.contains("Заявка на покупку"));
+        assertTrue(controller.contains("Заявка на продажу"));
+        assertTrue(controller.contains("renderImmediateQuote"));
+        assertTrue(service.contains("finishImmediate"));
+        assertFalse(controller.contains("s.price = Long.MAX_VALUE"));
+        assertFalse(controller.contains("s.price = 1; // immediate"));
+    }
+
+    @Test
+    void notificationFeedbackIsDebouncedAndBounded() throws Exception {
+        String notifications = source("com/valorcraft/vauction/application/MarketNotificationService.java");
+        assertTrue(notifications.contains("FLUSH_INTERVAL_TICKS = 60"));
+        assertTrue(notifications.contains("MAX_BATCHES_PER_FLUSH = 32"));
+        assertTrue(notifications.contains("if (player == null) continue"));
+        assertTrue(notifications.contains("states.advance"));
+    }
+
+    @Test
+    void conservativePriceWarningNeedsTwoReferencesAndNeverChangesPrice() {
+        MarketSummary normal = new MarketSummary("key", "Copper", 31, 33, 10, 10, 32);
+        assertFalse(MarketController.shouldWarnPrice(OrderSide.BUY, 35, normal));
+        assertTrue(MarketController.shouldWarnPrice(OrderSide.BUY, 320, normal));
+        assertTrue(MarketController.shouldWarnPrice(OrderSide.SELL, 3, normal));
+        MarketSummary thin = new MarketSummary("key", "Copper", 0, 31, 0, 10, 0);
+        assertFalse(MarketController.shouldWarnPrice(OrderSide.BUY, 1000, thin));
+        assertEquals(320L, 320L, "warning is advisory and never rewrites the entered price");
     }
 }

@@ -20,6 +20,8 @@ import java.util.UUID;
  */
 public final class DeliveryRepository {
 
+    public record ClaimableSummary(long count, long latestId) {}
+
     private static final String COLUMNS = "delivery_id, dedupe_key, player_uuid, listing_id, operation_id, "
             + "delivery_type, state, item_blob, item_codec_version, item_hash, item_registry_id, "
             + "item_display_name, item_search_name, quantity, created_at, claimable_at, claim_started_at, "
@@ -106,6 +108,35 @@ public final class DeliveryRepository {
             }
         } catch (SQLException e) {
             throw new DatabaseException("claimable delivery page failed", e);
+        }
+    }
+
+    public ClaimableSummary claimableAfter(Connection c, UUID playerUuid, long afterId) {
+        String sql = "SELECT COUNT(*),COALESCE(MAX(delivery_id),?) FROM auction_deliveries "
+                + "WHERE player_uuid=? AND state='CLAIMABLE' AND delivery_id>?";
+        try (PreparedStatement ps = c.prepareStatement(sql)) {
+            ps.setLong(1, afterId);
+            ps.setString(2, playerUuid.toString());
+            ps.setLong(3, afterId);
+            try (ResultSet rs = ps.executeQuery()) {
+                rs.next();
+                return new ClaimableSummary(rs.getLong(1), rs.getLong(2));
+            }
+        } catch (SQLException e) {
+            throw new DatabaseException("claimable delivery summary failed", e);
+        }
+    }
+
+    public long latestClaimableId(Connection c, UUID playerUuid) {
+        try (PreparedStatement ps = c.prepareStatement(
+                "SELECT COALESCE(MAX(delivery_id),0) FROM auction_deliveries "
+                        + "WHERE player_uuid=? AND state='CLAIMABLE'")) {
+            ps.setString(1, playerUuid.toString());
+            try (ResultSet rs = ps.executeQuery()) {
+                return rs.next() ? rs.getLong(1) : 0;
+            }
+        } catch (SQLException e) {
+            throw new DatabaseException("latest delivery cursor failed", e);
         }
     }
 

@@ -6,6 +6,7 @@ import com.valorcraft.vauction.application.DeliveryService;
 import com.valorcraft.vauction.application.InventoryOps;
 import com.valorcraft.vauction.application.ListingService;
 import com.valorcraft.vauction.application.ServerInventoryOps;
+import com.valorcraft.vauction.application.MarketNotificationService;
 import com.valorcraft.vauction.config.AuctionConfig;
 import com.valorcraft.vauction.config.AuctionSettings;
 import com.valorcraft.vauction.economy.EconomyGateway;
@@ -20,6 +21,7 @@ import com.valorcraft.vauction.persistence.OperationRepository;
 import com.valorcraft.vauction.persistence.OrderRepository;
 import com.valorcraft.vauction.persistence.SaleRepository;
 import com.valorcraft.vauction.persistence.TradeRepository;
+import com.valorcraft.vauction.persistence.PlayerMarketStateRepository;
 import com.valorcraft.vauction.recovery.RecoveryService;
 import net.minecraft.server.MinecraftServer;
 import org.apache.logging.log4j.LogManager;
@@ -61,6 +63,7 @@ public final class VAuctionCore {
     private AuctionService auctionService;
     private AuctionReadService auctionReadService;
     private RecoveryService recoveryService;
+    private MarketNotificationService notificationService;
 
     private VAuctionCore() {}
 
@@ -118,6 +121,10 @@ public final class VAuctionCore {
                     core.deliveries, core.codec, marketKeys);
             core.recoveryService = new RecoveryService(core.database, core.orders, core.trades,
                     core.deliveries, core.economyGateway, core.auctionService);
+            PlayerMarketStateRepository playerStates = new PlayerMarketStateRepository();
+            core.notificationService = new MarketNotificationService(core.database, core.orders,
+                    core.trades, core.deliveries, playerStates, server);
+            core.auctionService.setSettledTradeListener(core.notificationService::onSettled);
 
             // 6а. автоматическое восстановление после краха (идемпотентно)
             RecoveryService.ScanReport recovery = core.recoveryService.startupScan();
@@ -228,5 +235,9 @@ public final class VAuctionCore {
 
     public RecoveryService recoveryService() {
         return recoveryService;
+    }
+
+    public MarketNotificationService notificationService() {
+        return notificationService;
     }
 }

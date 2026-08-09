@@ -84,7 +84,8 @@ class DatabaseTest {
         Set<String> tables = db.query(this::readTables);
         assertEquals(Set.of("auction_listings", "auction_buy_orders", "auction_deliveries",
                 "auction_sales", "auction_operation_log", "auction_orders", "auction_trades",
-                "auction_order_acceptance", "auction_match_queue", "schema_version"), tables);
+                "auction_order_acceptance", "auction_match_queue", "auction_ioc_orders",
+                "auction_player_market_state", "schema_version"), tables);
         assertTrue(db.schemaVersion() >= 1, "schema version must be >= 1");
     }
 
@@ -137,6 +138,21 @@ class DatabaseTest {
     }
 
     @Test
+    void playerExperienceQueriesUseV007Indexes() {
+        assertPlanUses("SELECT settled_at,trade_id FROM auction_trades "
+                        + "WHERE buyer_uuid='x' AND state='SETTLED' "
+                        + "ORDER BY settled_at DESC,trade_id DESC LIMIT 1",
+                "idx_trades_buyer_notifications");
+        assertPlanUses("SELECT settled_at,trade_id FROM auction_trades "
+                        + "WHERE seller_uuid='x' AND state='SETTLED' "
+                        + "ORDER BY settled_at DESC,trade_id DESC LIMIT 1",
+                "idx_trades_seller_notifications");
+        assertPlanUses("SELECT order_id FROM auction_ioc_orders "
+                        + "ORDER BY created_at,order_id LIMIT 16",
+                "idx_ioc_orders_created");
+    }
+
+    @Test
     void populatedPreV003DatabaseMigratesAndKeepsOperationPhase() {
         SqliteJdbcSource source = new SqliteJdbcSource("jdbc:sqlite::memory:");
         source.open();
@@ -159,7 +175,7 @@ class DatabaseTest {
             });
 
             MigrationRunner.Result result = source.query(MigrationRunner::run);
-            assertEquals(6, result.schemaVersion());
+            assertEquals(7, result.schemaVersion());
             String phase = source.query(c -> {
                 try (Statement st = c.createStatement();
                      ResultSet rs = st.executeQuery(
@@ -199,8 +215,9 @@ class DatabaseTest {
             });
 
             MigrationRunner.Result result = source.query(MigrationRunner::run);
-            assertEquals(6, result.schemaVersion());
-            assertEquals(List.of("V005__bounded_work.sql", "V006__gui_read_indexes.sql"),
+            assertEquals(7, result.schemaVersion());
+            assertEquals(List.of("V005__bounded_work.sql", "V006__gui_read_indexes.sql",
+                            "V007__player_experience.sql"),
                     result.appliedFiles());
             int acceptedRows = source.query(c -> {
                 try (Statement st = c.createStatement(); ResultSet rs = st.executeQuery(
@@ -338,10 +355,38 @@ class DatabaseTest {
 
         try (DatabaseManager fileDb = DatabaseManager.openSqlite(databasePath)) {
             fileDb.initialize();
-            assertEquals(6, fileDb.schemaVersion());
+            assertEquals(7, fileDb.schemaVersion());
         }
 
         assertTrue(Files.isRegularFile(databasePath));
+    }
+
+    @Test
+    void playerNotificationCursorAndOnboardingSurviveDatabaseRestart() {
+        Path databasePath = tempDir.resolve("cursor-restart").resolve("auction.db");
+        UUID player = UUID.randomUUID();
+        try (DatabaseManager first = DatabaseManager.openSqlite(databasePath)) {
+            first.initialize();
+            PlayerMarketStateRepository states = new PlayerMarketStateRepository();
+            boolean firstOnboarding = first.inTransaction(c -> states.markOnboardingShown(c, player));
+            boolean repeatedOnboarding = first.inTransaction(c -> states.markOnboardingShown(c, player));
+            assertTrue(firstOnboarding);
+            assertFalse(repeatedOnboarding);
+            first.inTransaction(c -> {
+                states.advance(c, player, 1234L, "trade-z", 77L);
+                return null;
+            });
+        }
+
+        try (DatabaseManager restarted = DatabaseManager.openSqlite(databasePath)) {
+            restarted.initialize();
+            PlayerMarketStateRepository.State state = restarted.query(c ->
+                    new PlayerMarketStateRepository().find(c, player).orElseThrow());
+            assertEquals(1234L, state.tradeAt());
+            assertEquals("trade-z", state.tradeId());
+            assertEquals(77L, state.deliveryId());
+            assertTrue(state.onboardingShown());
+        }
     }
 
     @Test

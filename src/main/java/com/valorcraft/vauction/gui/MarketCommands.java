@@ -173,16 +173,18 @@ final class MarketCommands {
     }
 
     private static int help(CommandSourceStack source) {
-        source.sendSuccess(() -> Component.literal("Биржа ValorCraft — заявки могут исполниться сразу или ждать другого игрока.")
+        source.sendSuccess(() -> Component.literal("Биржа ValorCraft")
                 .withStyle(ChatFormatting.GOLD), false);
-        helpLine(source, "/market", "открыть биржу");
-        helpLine(source, "/market sell <цена> [количество]", "продать предмет из основной руки; без количества — все точные предметы");
-        helpLine(source, "/market buy <предмет> <количество> <макс. цена>", "создать заявку на обычный предмет");
-        helpLine(source, "/market search <текст>", "найти рынок");
-        helpLine(source, "/market info", "сводка по предмету в руке");
-        helpLine(source, "/market orders | cancel <UUID>", "мои заявки и отмена");
-        helpLine(source, "/market claims | claim <ID>", "готовые получения");
-        source.sendSuccess(() -> Component.literal("Все команды также работают через /ah и /auction. Цены задаются в минимальных единицах валюты.")
+        source.sendSuccess(() -> Component.literal("Игроки сами назначают цены. Если цена покупателя подходит продавцу, сделка происходит автоматически.")
+                .withStyle(ChatFormatting.GRAY), false);
+        helpLine(source, "/ah", "открыть понятное меню покупки и продажи");
+        helpLine(source, "/ah sell 32 64", "продать 64 предмета из основной руки по 32 за штуку");
+        helpLine(source, "/ah buy minecraft:copper_ingot 64 32", "купить 64 предмета максимум по 32 за штуку");
+        helpLine(source, "/ah search <текст>", "найти товар");
+        helpLine(source, "/ah info", "цены и количество предмета в руке");
+        helpLine(source, "/ah orders", "мои ожидающие и частично исполненные заявки");
+        helpLine(source, "/ah claims", "получить покупки и возвраты");
+        source.sendSuccess(() -> Component.literal("Нажимайте Tab после каждой части команды. /market и /auction работают так же.")
                 .withStyle(ChatFormatting.GRAY), false);
         return 1;
     }
@@ -281,7 +283,6 @@ final class MarketCommands {
 
     private static int outcome(CommandSourceStack source, AuctionService.Outcome result) {
         if (result.isSuccess()) {
-            String suffix = result.order() == null ? "" : " ID: " + result.order().orderId();
             String message;
             if (result.status() == AuctionService.Result.ACCEPTED_PENDING) {
                 message = "Операция принята и безопасно завершается.";
@@ -297,9 +298,17 @@ final class MarketCommands {
             } else {
                 message = "Заявка создана и ждёт подходящего предложения.";
             }
-            String shown = message + suffix;
-            source.sendSuccess(() -> Component.literal(shown)
+            source.sendSuccess(() -> Component.literal(message)
                     .withStyle(ChatFormatting.GREEN), false);
+            if (result.order() != null) {
+                String command = result.order().remainingQuantity() == 0
+                        && result.order().side() == com.valorcraft.vauction.domain.order.OrderSide.BUY
+                        ? "/ah claims" : "/ah orders";
+                String label = command.endsWith("claims") ? "[Получить предметы]" : "[Мои заявки]";
+                source.sendSuccess(() -> Component.literal(label).withStyle(style -> style
+                        .withColor(ChatFormatting.AQUA)
+                        .withClickEvent(new ClickEvent(ClickEvent.Action.RUN_COMMAND, command))), false);
+            }
             return 1;
         }
         return fail(source, result.message());

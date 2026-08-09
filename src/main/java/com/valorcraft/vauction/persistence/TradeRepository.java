@@ -18,6 +18,15 @@ import java.util.UUID;
  */
 public final class TradeRepository {
 
+    public record Cursor(long settledAt, String tradeId) {
+        public static Cursor empty() { return new Cursor(0, ""); }
+    }
+
+    public record PlayerSummary(long fills, long boughtQuantity, long soldQuantity,
+                                long completedOrders, long partialOrders, Cursor cursor) {
+        public boolean empty() { return fills == 0; }
+    }
+
     private static final String COLUMNS = "trade_id, market_key, buy_order_id, sell_order_id, "
             + "maker_side, execution_price, quantity, gross_minor, commission_minor, "
             + "seller_net_minor, buyer_uuid, seller_uuid, escrow_reference, state, "
@@ -141,6 +150,53 @@ public final class TradeRepository {
             }
         } catch (SQLException e) {
             throw new DatabaseException("all trades failed", e);
+        }
+    }
+
+    public Cursor latestForPlayer(Connection c, UUID playerId) {
+        String sql = "SELECT settled_at,trade_id FROM ("
+                + "SELECT settled_at,trade_id FROM auction_trades WHERE buyer_uuid=? AND state='SETTLED' "
+                + "UNION ALL SELECT settled_at,trade_id FROM auction_trades WHERE seller_uuid=? AND state='SETTLED') "
+                + "ORDER BY settled_at DESC,trade_id DESC LIMIT 1";
+        try (PreparedStatement ps = c.prepareStatement(sql)) {
+            ps.setString(1, playerId.toString());
+            ps.setString(2, playerId.toString());
+            try (ResultSet rs = ps.executeQuery()) {
+                return rs.next() ? new Cursor(rs.getLong(1), rs.getString(2)) : Cursor.empty();
+            }
+        } catch (SQLException e) {
+            throw new DatabaseException("latest player trade cursor failed", e);
+        }
+    }
+
+    public PlayerSummary summaryAfter(Connection c, UUID playerId, long afterAt, String afterId) {
+        String sql = "SELECT COUNT(*),"
+                + "COALESCE(SUM(CASE WHEN t.buyer_uuid=? THEN t.quantity ELSE 0 END),0),"
+                + "COALESCE(SUM(CASE WHEN t.seller_uuid=? THEN t.quantity ELSE 0 END),0),"
+                + "COUNT(DISTINCT CASE WHEN t.buyer_uuid=? AND bo.status='FILLED' THEN t.buy_order_id "
+                + "WHEN t.seller_uuid=? AND so.status='FILLED' THEN t.sell_order_id END),"
+                + "COUNT(DISTINCT CASE WHEN t.buyer_uuid=? AND bo.status='ACTIVE' THEN t.buy_order_id "
+                + "WHEN t.seller_uuid=? AND so.status='ACTIVE' THEN t.sell_order_id END) "
+                + "FROM auction_trades t "
+                + "LEFT JOIN auction_orders bo ON bo.order_id=t.buy_order_id "
+                + "LEFT JOIN auction_orders so ON so.order_id=t.sell_order_id "
+                + "WHERE t.state='SETTLED' AND (t.buyer_uuid=? OR t.seller_uuid=?) "
+                + "AND (t.settled_at>? OR (t.settled_at=? AND t.trade_id>?))";
+        try (PreparedStatement ps = c.prepareStatement(sql)) {
+            for (int i = 1; i <= 6; i++) ps.setString(i, playerId.toString());
+            ps.setString(7, playerId.toString());
+            ps.setString(8, playerId.toString());
+            ps.setLong(9, afterAt);
+            ps.setLong(10, afterAt);
+            ps.setString(11, afterId == null ? "" : afterId);
+            try (ResultSet rs = ps.executeQuery()) {
+                rs.next();
+                Cursor latest = latestForPlayer(c, playerId);
+                return new PlayerSummary(rs.getLong(1), rs.getLong(2), rs.getLong(3),
+                        rs.getLong(4), rs.getLong(5), latest);
+            }
+        } catch (SQLException e) {
+            throw new DatabaseException("player trade summary failed", e);
         }
     }
 
