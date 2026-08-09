@@ -15,6 +15,14 @@ class ServerOnlyGuiStructureTest {
     }
 
     @Test
+    void allMarketCommandAliasesShareTheSameCommandTree() throws Exception {
+        String commands = source("com/valorcraft/vauction/gui/MarketCommands.java");
+        assertTrue(commands.contains("register(root(\"market\"))"));
+        assertTrue(commands.contains("register(root(\"auction\"))"));
+        assertTrue(commands.contains("register(root(\"ah\"))"));
+    }
+
+    @Test
     void menuUsesVanillaTypeAndDeniesEveryMovementPath() throws Exception {
         String menu = source("com/valorcraft/vauction/gui/ServerChestMenu.java");
         assertTrue(menu.contains("MenuType.GENERIC_9x6"));

@@ -17,6 +17,7 @@ final class MarketCommands {
     static void register(RegisterCommandsEvent event) {
         event.getDispatcher().register(root("market"));
         event.getDispatcher().register(root("auction"));
+        event.getDispatcher().register(root("ah"));
     }
 
     private static LiteralArgumentBuilder<CommandSourceStack> root(String name) {
