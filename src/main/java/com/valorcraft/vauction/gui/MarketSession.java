@@ -14,6 +14,7 @@ final class MarketSession {
     final Map<Integer, GuiAction> actions = new HashMap<>();
     MarketScreen screen = MarketScreen.BROWSE;
     int page;
+    int cataloguePage;
     String search = "";
     ItemStack unit = ItemStack.EMPTY;
     String marketKey;
@@ -27,6 +28,7 @@ final class MarketSession {
     boolean transitioning;
     boolean executing;
     boolean immediate;
+    boolean searchActive;
     AuctionReadService.ImmediateQuote quote;
     SimpleContainer contents;
     ServerChestMenu menu;

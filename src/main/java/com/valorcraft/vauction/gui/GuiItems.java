@@ -44,7 +44,6 @@ final class GuiItems {
                 ? display.getList("Lore", net.minecraft.nbt.Tag.TAG_STRING).copy()
                 : new ListTag();
         lore.add(StringTag.valueOf(Component.Serializer.toJson(Component.empty())));
-        lore.add(StringTag.valueOf(Component.Serializer.toJson(MarketText.brand())));
         for (Component line : marketLines) {
             lore.add(StringTag.valueOf(Component.Serializer.toJson(line)));
         }

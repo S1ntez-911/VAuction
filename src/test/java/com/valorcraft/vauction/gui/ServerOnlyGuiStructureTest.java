@@ -26,6 +26,8 @@ class ServerOnlyGuiStructureTest {
         assertTrue(commands.contains("Commands.literal(\"help\")"));
         assertTrue(commands.contains("Commands.literal(\"sell\")"));
         assertTrue(commands.contains("Commands.literal(\"buy\")"));
+        assertTrue(commands.contains("Commands.literal(\"quantity\")"));
+        assertTrue(commands.contains("Commands.literal(\"price\")"));
         assertTrue(commands.contains("ItemArgument.item(context)"));
     }
 
@@ -145,6 +147,8 @@ class ServerOnlyGuiStructureTest {
         assertTrue(items.contains("result = source.copy()"));
         assertTrue(items.contains("getList(\"Lore\""));
         assertFalse(items.substring(items.indexOf("decorateMarketItem")).contains("setHoverName"));
+        assertFalse(items.substring(items.indexOf("decorateMarketItem")).contains("MarketText.brand()"),
+                "branding must not repeat on every catalogue card");
         assertEquals(1, controller.split("player\\.openMenu", -1).length - 1);
     }
 
@@ -152,26 +156,76 @@ class ServerOnlyGuiStructureTest {
     void listNavigationIsContextualInsteadOfRepeatingCurrentDestination() throws Exception {
         String controller = source("com/valorcraft/vauction/gui/MarketController.java");
         String catalogue = between(controller, "private static void catalogueNavigation", "private static void searchNavigation");
-        String search = between(controller, "private static void searchNavigation", "private static void ordersNavigation");
-        String orders = between(controller, "private static void ordersNavigation", "private static void claimsNavigation");
-        String claims = between(controller, "private static void claimsNavigation", "private static void pageEdges");
+        String search = between(controller, "private static void searchNavigation", "private static void myNavigation");
+        String my = between(controller, "private static void myNavigation", "private static void pageEdges");
         assertFalse(catalogue.contains("\"Каталог\""), "catalogue must not link to itself");
+        assertFalse(catalogue.contains("Продать"));
+        assertFalse(catalogue.contains("Получить"));
+        assertTrue(catalogue.contains("searchNav"));
+        assertTrue(catalogue.contains("myNav"));
         assertTrue(search.contains("\"Все товары\""), "search must offer filter reset");
-        assertFalse(orders.contains("ordersNav("), "orders must not link to itself");
-        assertFalse(claims.contains("claimsNav("), "claims must not link to itself");
+        assertTrue(my.contains("\"Каталог\""));
     }
 
     @Test
     void pageClickHasOnlySemanticPageSoundAndQuantityUsesDirectPresets() throws Exception {
         String controller = source("com/valorcraft/vauction/gui/MarketController.java");
         String actions = source("com/valorcraft/vauction/gui/GuiAction.java");
-        assertTrue(controller.contains("case PAGE -> { s.page = Math.max(0, s.page + a.number()); MarketSounds.page(player)"));
+        assertTrue(controller.contains("case PAGE ->"));
+        assertTrue(controller.contains("MarketSounds.page(player); refreshCurrent(player, s)"));
         assertFalse(controller.contains("a.type() == GuiAction.Type.PAGE"));
         assertTrue(actions.contains("SET_QUANTITY"));
         assertTrue(actions.contains("SET_MAX_QUANTITY"));
         assertTrue(controller.contains("quantityPreset(box, s, 23, 64)"));
         String all = between(controller, "private void setMaximumQuantity", "private void renderMarkets");
         assertTrue(all.contains("service().availableCount"), "ALL must read current server inventory on every click");
+    }
+
+    @Test
+    void catalogueClickIntentOpensTradeWithoutLegacyMarketScreen() throws Exception {
+        String controller = source("com/valorcraft/vauction/gui/MarketController.java");
+        String actions = source("com/valorcraft/vauction/gui/GuiAction.java");
+        assertTrue(actions.contains("OPEN_TRADE"));
+        assertFalse(actions.contains("OPEN_MARKET"));
+        assertTrue(controller.contains("button == 1 ? OrderSide.SELL : OrderSide.BUY"));
+        assertTrue(controller.contains("MarketText.colored(\"ЛКМ → купить\""));
+        assertTrue(controller.contains("MarketText.colored(\"ПКМ → продать\""));
+        assertFalse(controller.contains("private void renderMarket("));
+        assertFalse(controller.contains("private static void levelItems("));
+    }
+
+    @Test
+    void tradeModesReuseOneLayoutFamilyAndKeepBothLimitOrderBackends() throws Exception {
+        String controller = source("com/valorcraft/vauction/gui/MarketController.java");
+        String screens = source("com/valorcraft/vauction/gui/MarketScreen.java");
+        assertTrue(screens.contains("TRADE_IMMEDIATE"));
+        assertTrue(screens.contains("TRADE_LIMIT"));
+        assertTrue(screens.contains("PRICE_WARNING"));
+        assertTrue(controller.contains("private void renderImmediateQuote"));
+        assertTrue(controller.contains("private void renderEditor"));
+        assertTrue(controller.contains("Своя цена"));
+        assertTrue(controller.contains("✓ Выставить заявку"));
+        assertTrue(controller.contains("Точно: /ah quantity <число>"));
+        assertTrue(controller.contains("Точно: /ah price <число>"));
+        assertTrue(controller.contains("confirmOrder(player, s);"), "normal limit submission has no mandatory confirmation page");
+        assertTrue(controller.contains("createBuyOrder(player.getUUID(), s.unit"));
+        assertTrue(controller.contains("createSellOrderFromInventory(player, s.unit"));
+    }
+
+    @Test
+    void myIsOneBoundedRelevantFeedForOrdersAndDeliveries() throws Exception {
+        String controller = source("com/valorcraft/vauction/gui/MarketController.java");
+        String read = source("com/valorcraft/vauction/application/AuctionReadService.java");
+        String repository = source("com/valorcraft/vauction/persistence/PlayerMarketActivityReadRepository.java");
+        assertTrue(controller.contains("private void renderMy"));
+        assertFalse(controller.contains("private void renderOrders"));
+        assertFalse(controller.contains("private void renderDeliveries"));
+        assertTrue(read.contains("playerActivity"));
+        assertTrue(repository.contains("status IN ('ACTIVE','MANUAL_REVIEW')"));
+        assertTrue(repository.contains("state='CLAIMABLE'"));
+        assertTrue(repository.contains("ORDER BY priority, sort_time DESC, tie_key DESC LIMIT ? OFFSET ?"));
+        assertTrue(controller.contains("case CLAIM -> claim"));
+        assertTrue(controller.contains("case MANAGE_ORDER -> manageOrder"));
     }
 
     @Test

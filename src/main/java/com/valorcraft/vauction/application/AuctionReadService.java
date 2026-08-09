@@ -14,6 +14,7 @@ import com.valorcraft.vauction.persistence.DatabaseManager;
 import com.valorcraft.vauction.persistence.DeliveryRepository;
 import com.valorcraft.vauction.persistence.MarketReadRepository;
 import com.valorcraft.vauction.persistence.OrderRepository;
+import com.valorcraft.vauction.persistence.PlayerMarketActivityReadRepository;
 import net.minecraft.world.item.ItemStack;
 
 import java.util.ArrayList;
@@ -56,6 +57,7 @@ public final class AuctionReadService {
     private final OrderRepository orders;
     private final DeliveryRepository deliveries;
     private final MarketReadRepository markets;
+    private final PlayerMarketActivityReadRepository activity;
     private final ItemStackCodec codec;
     private final MarketKeyStrategy keys;
     private final boolean allowSelfPurchase;
@@ -76,6 +78,7 @@ public final class AuctionReadService {
         this.keys = keys;
         this.allowSelfPurchase = allowSelfPurchase;
         this.markets = new MarketReadRepository();
+        this.activity = new PlayerMarketActivityReadRepository();
     }
 
     public Page<MarketCard> markets(int requestedPage, String query) {
@@ -177,6 +180,13 @@ public final class AuctionReadService {
     public Page<AuctionDelivery> deliveries(UUID playerId, int requestedPage) {
         int page = Math.max(0, requestedPage);
         List<AuctionDelivery> rows = database.query(c -> deliveries.claimablePage(c, playerId,
+                page * PAGE_SIZE, PAGE_SIZE + 1));
+        return trim(rows, page);
+    }
+
+    public Page<PlayerMarketActivity> playerActivity(UUID playerId, int requestedPage) {
+        int page = Math.max(0, requestedPage);
+        List<PlayerMarketActivity> rows = database.query(c -> activity.page(c, playerId,
                 page * PAGE_SIZE, PAGE_SIZE + 1));
         return trim(rows, page);
     }

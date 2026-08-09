@@ -1,5 +1,6 @@
 package com.valorcraft.vauction.persistence;
 
+import com.valorcraft.vauction.application.PlayerMarketActivity;
 import com.valorcraft.vauction.domain.delivery.AuctionDelivery;
 import com.valorcraft.vauction.domain.delivery.DeliveryState;
 import com.valorcraft.vauction.domain.delivery.DeliveryType;
@@ -138,6 +139,45 @@ class DatabaseTest {
         assertPlanUses("SELECT execution_price FROM auction_trades WHERE market_key='x' "
                         + "AND state='SETTLED' ORDER BY settled_at DESC, trade_id DESC LIMIT 1",
                 "idx_trades_market_last");
+    }
+
+    @Test
+    void unifiedPlayerActivityIsRelevantPrioritizedBoundedAndDeterministic() {
+        UUID player = UUID.randomUUID();
+        OrderRepository orders = new OrderRepository();
+        DeliveryRepository deliveries = new DeliveryRepository();
+        db.inTransaction(c -> {
+            orders.insert(c, Order.newOrder(player, OrderSide.BUY, "buy",
+                    item("minecraft:iron_ingot"), 18, 200, 10).filledQuantity(80).build());
+            orders.insert(c, Order.newOrder(player, OrderSide.SELL, "sell",
+                    item("minecraft:copper_ingot"), 35, 64, 20).build());
+            orders.insert(c, Order.newOrder(player, OrderSide.BUY, "review",
+                    item("minecraft:gold_ingot"), 99, 5, 30).build().toManualReview(31));
+            Order filled = Order.newOrder(player, OrderSide.BUY, "filled",
+                    item("minecraft:diamond"), 1, 1, 40).build().markFilled(1, 41);
+            orders.insert(c, filled);
+            deliveries.insert(c, AuctionDelivery.newDelivery(player, 0, "purchase",
+                    DeliveryType.PURCHASED, item("minecraft:steel_ingot"), 50)
+                    .dedupeKey("purchase").build().toClaimable(61L, "p"));
+            deliveries.insert(c, AuctionDelivery.newDelivery(player, 0, "return",
+                    DeliveryType.CANCELLED_RETURN, item("minecraft:tin_ingot"), 60)
+                    .dedupeKey("return").build().toClaimable(61L, "r"));
+            return null;
+        });
+
+        PlayerMarketActivityReadRepository read = new PlayerMarketActivityReadRepository();
+        List<PlayerMarketActivity> page = db.query(c -> read.page(c, player, 0, 45));
+        assertEquals(5, page.size(), "filled and already irrelevant orders stay out of My");
+        assertTrue(page.get(0).claimable());
+        assertEquals(DeliveryType.CANCELLED_RETURN, page.get(0).deliveryType(),
+                "claimables are first and newest wins deterministic ties");
+        assertTrue(page.get(1).claimable());
+        assertEquals(OrderStatus.MANUAL_REVIEW, page.get(2).orderStatus());
+        assertEquals(OrderSide.SELL, page.get(3).side());
+        assertEquals(OrderSide.BUY, page.get(4).side());
+        assertEquals(2, db.query(c -> read.page(c, player, 0, 2)).size(), "SQL limit is hard bounded");
+        assertEquals(page.subList(2, 4), db.query(c -> read.page(c, player, 2, 2)),
+                "offset pagination is deterministic");
     }
 
     @Test

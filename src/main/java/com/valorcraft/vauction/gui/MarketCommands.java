@@ -51,6 +51,16 @@ final class MarketCommands {
                         .then(Commands.argument("text", StringArgumentType.greedyString())
                                 .suggests(MarketCommands::suggestItems)
                                 .executes(ctx -> search(ctx.getSource(), StringArgumentType.getString(ctx, "text")))))
+                .then(Commands.literal("quantity")
+                        .then(Commands.argument("value", IntegerArgumentType.integer(1))
+                                .suggests(MarketCommands::suggestCommonQuantities)
+                                .executes(ctx -> quantity(ctx.getSource(),
+                                        IntegerArgumentType.getInteger(ctx, "value")))))
+                .then(Commands.literal("price")
+                        .then(Commands.argument("value", LongArgumentType.longArg(1))
+                                .suggests(MarketCommands::suggestPrices)
+                                .executes(ctx -> editorPrice(ctx.getSource(),
+                                        LongArgumentType.getLong(ctx, "value")))))
                 .then(Commands.literal("sell").executes(ctx -> helpSell(ctx.getSource()))
                         .then(Commands.argument("price", LongArgumentType.longArg(1))
                                 .suggests(MarketCommands::suggestPrices)
@@ -102,6 +112,28 @@ final class MarketCommands {
         ServerPlayer player = player(source);
         if (player == null) return 0;
         MarketController.instance().openOrders(player);
+        return 1;
+    }
+
+    private static int quantity(CommandSourceStack source, int value) {
+        ServerPlayer player = player(source);
+        if (player == null) return 0;
+        if (!MarketController.instance().setQuantity(player, value)) {
+            return fail(source, "Сначала откройте сделку в /ah.");
+        }
+        source.sendSuccess(() -> Component.literal("Количество: " + value)
+                .withStyle(ChatFormatting.GREEN), false);
+        return 1;
+    }
+
+    private static int editorPrice(CommandSourceStack source, long value) {
+        ServerPlayer player = player(source);
+        if (player == null) return 0;
+        if (!MarketController.instance().setPrice(player, value)) {
+            return fail(source, "Сначала откройте режим «Своя цена» в /ah.");
+        }
+        source.sendSuccess(() -> Component.literal("Цена за штуку: " + value)
+                .withStyle(ChatFormatting.GREEN), false);
         return 1;
     }
 
@@ -181,6 +213,8 @@ final class MarketCommands {
         helpLine(source, "/ah sell 32 64", "продать 64 предмета из основной руки по 32 за штуку");
         helpLine(source, "/ah buy minecraft:copper_ingot 64 32", "купить 64 предмета максимум по 32 за штуку");
         helpLine(source, "/ah search <текст>", "найти товар");
+        helpLine(source, "/ah quantity 500", "точное количество в открытой сделке");
+        helpLine(source, "/ah price 28", "точная цена в режиме «Своя цена»");
         helpLine(source, "/ah info", "цены и количество предмета в руке");
         helpLine(source, "/ah orders", "мои ожидающие и частично исполненные заявки");
         helpLine(source, "/ah claims", "получить покупки и возвраты");
@@ -289,7 +323,7 @@ final class MarketCommands {
             } else if (result.order() == null) {
                 message = result.message();
             } else if (result.order().status() == com.valorcraft.vauction.domain.order.OrderStatus.CANCELLED) {
-                message = "Заявка отменена; возврат доступен в получениях.";
+                message = "Заявка отменена; возврат доступен в «Моём».";
             } else if (result.order().remainingQuantity() == 0) {
                 message = "Заявка исполнена полностью.";
             } else if (result.filledQuantity() > 0) {
@@ -304,7 +338,7 @@ final class MarketCommands {
                 String command = result.order().remainingQuantity() == 0
                         && result.order().side() == com.valorcraft.vauction.domain.order.OrderSide.BUY
                         ? "/ah claims" : "/ah orders";
-                String label = command.endsWith("claims") ? "[Получить предметы]" : "[Мои заявки]";
+                String label = "[Моё]";
                 source.sendSuccess(() -> Component.literal(label).withStyle(style -> style
                         .withColor(ChatFormatting.AQUA)
                         .withClickEvent(new ClickEvent(ClickEvent.Action.RUN_COMMAND, command))), false);
