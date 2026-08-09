@@ -8,7 +8,8 @@ record GuiAction(Type type, int number, long amount, UUID orderId, long delivery
                  ItemStack item) {
     enum Type {
         HOME, BROWSE, HELP, SEARCH_HELP, PICKER, ORDERS, DELIVERIES, OPEN_MARKET, PAGE, REFRESH,
-        BUY_NOW, SELL_NOW, BUY, SELL, ADJUST_QUANTITY, ADJUST_PRICE_PERCENT, BEST_PRICE,
+        BUY_NOW, SELL_NOW, BUY, SELL, ADJUST_QUANTITY, SET_QUANTITY, SET_MAX_QUANTITY,
+        ADJUST_PRICE_PERCENT, BEST_PRICE,
         REVIEW, CONFIRM_IMMEDIATE, CONFIRM_ORDER, PREPARE_CANCEL, CONFIRM_CANCEL, CLAIM, BACK
     }
 
@@ -18,6 +19,10 @@ record GuiAction(Type type, int number, long amount, UUID orderId, long delivery
 
     static GuiAction number(Type type, int value) {
         return new GuiAction(type, value, 0, null, 0, ItemStack.EMPTY);
+    }
+
+    static GuiAction quantityPreset(int quantity) {
+        return number(Type.SET_QUANTITY, quantity);
     }
 
     static GuiAction market(ItemStack item) {

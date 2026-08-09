@@ -47,11 +47,14 @@ class GuiItemsTest {
         assertNotSame(source, decorated);
         assertEquals(1, decorated.getCount());
         assertEquals("Закалённый медный слиток", decorated.getHoverName().getString());
+        assertEquals(source.getHoverName().getStyle().getColor(), decorated.getHoverName().getStyle().getColor());
         assertEquals(42, decorated.getDamageValue());
         assertEquals(9001, decorated.getTag().getInt("Energy"));
         assertEquals(before, source.save(new CompoundTag()), "decorator must not mutate the clean source");
         ListTag lore = decorated.getTagElement("display").getList("Lore", CompoundTag.TAG_STRING);
         assertTrue(lore.getString(0).contains("Качество: высокое"));
+        Component brand = Component.Serializer.fromJson(lore.getString(lore.size() - 3));
+        assertEquals(MarketPalette.BRAND, brand.getStyle().getColor(), "brand line uses the ValorCraft gold");
         assertTrue(lore.getString(lore.size() - 2).contains("Купить: 32"));
         assertTrue(lore.getString(lore.size() - 1).contains("ЛКМ — открыть"));
     }

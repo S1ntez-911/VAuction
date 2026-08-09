@@ -21,6 +21,15 @@ final class GuiItems {
         return result;
     }
 
+    static ItemStack namedButton(ItemStack source, Component name, List<Component> lore) {
+        ItemStack result = source.copy();
+        if (result.isEmpty()) return result;
+        result.setCount(1);
+        result.setHoverName(name);
+        setComponentLore(result, lore);
+        return result;
+    }
+
     static ItemStack named(ItemStack source, String name, ChatFormatting color, String... lore) {
         return namedButton(source, name, color, lore);
     }
@@ -34,9 +43,8 @@ final class GuiItems {
         ListTag lore = display.contains("Lore", net.minecraft.nbt.Tag.TAG_LIST)
                 ? display.getList("Lore", net.minecraft.nbt.Tag.TAG_STRING).copy()
                 : new ListTag();
-        if (!lore.isEmpty()) lore.add(StringTag.valueOf(Component.Serializer.toJson(Component.empty())));
-        lore.add(StringTag.valueOf(Component.Serializer.toJson(
-                Component.literal("Биржа ValorCraft").withStyle(ChatFormatting.DARK_GRAY))));
+        lore.add(StringTag.valueOf(Component.Serializer.toJson(Component.empty())));
+        lore.add(StringTag.valueOf(Component.Serializer.toJson(MarketText.brand())));
         for (Component line : marketLines) {
             lore.add(StringTag.valueOf(Component.Serializer.toJson(line)));
         }
@@ -51,6 +59,13 @@ final class GuiItems {
             Component component = Component.literal(line).withStyle(ChatFormatting.GRAY);
             lore.add(StringTag.valueOf(Component.Serializer.toJson(component)));
         }
+        display.put("Lore", lore);
+    }
+
+    private static void setComponentLore(ItemStack stack, List<Component> lines) {
+        CompoundTag display = stack.getOrCreateTagElement("display");
+        ListTag lore = new ListTag();
+        for (Component line : lines) lore.add(StringTag.valueOf(Component.Serializer.toJson(line)));
         display.put("Lore", lore);
     }
 }

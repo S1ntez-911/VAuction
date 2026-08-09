@@ -149,6 +149,32 @@ class ServerOnlyGuiStructureTest {
     }
 
     @Test
+    void listNavigationIsContextualInsteadOfRepeatingCurrentDestination() throws Exception {
+        String controller = source("com/valorcraft/vauction/gui/MarketController.java");
+        String catalogue = between(controller, "private static void catalogueNavigation", "private static void searchNavigation");
+        String search = between(controller, "private static void searchNavigation", "private static void ordersNavigation");
+        String orders = between(controller, "private static void ordersNavigation", "private static void claimsNavigation");
+        String claims = between(controller, "private static void claimsNavigation", "private static void pageEdges");
+        assertFalse(catalogue.contains("\"Каталог\""), "catalogue must not link to itself");
+        assertTrue(search.contains("\"Все товары\""), "search must offer filter reset");
+        assertFalse(orders.contains("ordersNav("), "orders must not link to itself");
+        assertFalse(claims.contains("claimsNav("), "claims must not link to itself");
+    }
+
+    @Test
+    void pageClickHasOnlySemanticPageSoundAndQuantityUsesDirectPresets() throws Exception {
+        String controller = source("com/valorcraft/vauction/gui/MarketController.java");
+        String actions = source("com/valorcraft/vauction/gui/GuiAction.java");
+        assertTrue(controller.contains("case PAGE -> { s.page = Math.max(0, s.page + a.number()); MarketSounds.page(player)"));
+        assertFalse(controller.contains("a.type() == GuiAction.Type.PAGE"));
+        assertTrue(actions.contains("SET_QUANTITY"));
+        assertTrue(actions.contains("SET_MAX_QUANTITY"));
+        assertTrue(controller.contains("quantityPreset(box, s, 23, 64)"));
+        String all = between(controller, "private void setMaximumQuantity", "private void renderMarkets");
+        assertTrue(all.contains("service().availableCount"), "ALL must read current server inventory on every click");
+    }
+
+    @Test
     void conservativePriceWarningNeedsTwoReferencesAndNeverChangesPrice() {
         MarketSummary normal = new MarketSummary("key", "Copper", 31, 33, 10, 10, 32);
         assertFalse(MarketController.shouldWarnPrice(OrderSide.BUY, 35, normal));
@@ -157,5 +183,9 @@ class ServerOnlyGuiStructureTest {
         MarketSummary thin = new MarketSummary("key", "Copper", 0, 31, 0, 10, 0);
         assertFalse(MarketController.shouldWarnPrice(OrderSide.BUY, 1000, thin));
         assertEquals(320L, 320L, "warning is advisory and never rewrites the entered price");
+    }
+
+    private static String between(String source, String start, String end) {
+        return source.substring(source.indexOf(start), source.indexOf(end, source.indexOf(start)));
     }
 }
