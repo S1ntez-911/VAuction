@@ -431,7 +431,18 @@ public final class AuctionService {
                     incoming.side(), incoming.pricePerUnit(), incoming.ownerUuid(),
                     settings.allowSelfPurchase(), incoming.orderId()).orElse(null));
             if (counterpart == null) {
-                database.inTransaction(c -> { matchWork.delete(c, work.workId()); return null; });
+                boolean lockedMakerExists = database.query(c ->
+                        orders.hasOlderCrossingCounterpart(c, incoming.marketKey(), incoming.side(),
+                                incoming.pricePerUnit(), incoming.ownerUuid(),
+                                settings.allowSelfPurchase(), incoming.orderId()));
+                database.inTransaction(c -> {
+                    if (lockedMakerExists) {
+                        matchWork.defer(c, work.workId(), attemptNow + MATCH_RETRY_DELAY_MILLIS);
+                    } else {
+                        matchWork.delete(c, work.workId());
+                    }
+                    return null;
+                });
                 continue;
             }
             int chunk = Math.min(incoming.remainingQuantity(), counterpart.remainingQuantity());

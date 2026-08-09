@@ -18,7 +18,10 @@ import com.valorcraft.vauction.item.ItemSnapshot;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.io.TempDir;
 
+import java.nio.file.Files;
+import java.nio.file.Path;
 import java.sql.Connection;
 import java.sql.PreparedStatement;
 import java.sql.ResultSet;
@@ -44,6 +47,9 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
  * уникальные ключи. Никакого Minecraft — чистая persistence-логика.
  */
 class DatabaseTest {
+
+    @TempDir
+    Path tempDir;
 
     private DatabaseManager db;
 
@@ -230,12 +236,13 @@ class DatabaseTest {
     void boundedMaintenanceQueriesUseV005Indexes() {
         assertPlanUses("SELECT work_id FROM auction_match_queue WHERE next_attempt_at<=1 "
                 + "ORDER BY next_attempt_at,created_at,work_id LIMIT 1", "idx_match_queue_ready");
-        assertPlanUses("SELECT order_id FROM auction_orders WHERE market_key='k' AND side='SELL' "
-                + "AND status='ACTIVE' AND processing_state='NONE' AND price_per_unit<=10 "
-                + "AND EXISTS (SELECT 1 FROM auction_order_acceptance maker_seq, "
-                + "auction_order_acceptance incoming_seq WHERE maker_seq.order_id=auction_orders.order_id "
-                + "AND incoming_seq.order_id='incoming' AND maker_seq.sequence<incoming_seq.sequence) "
-                + "ORDER BY price_per_unit,created_at,order_id LIMIT 1",
+        assertPlanUses("SELECT o.order_id FROM auction_orders o "
+                + "JOIN auction_order_acceptance maker_seq ON maker_seq.order_id=o.order_id "
+                + "JOIN auction_order_acceptance incoming_seq ON incoming_seq.order_id='incoming' "
+                + "WHERE o.market_key='k' AND o.side='SELL' AND o.status='ACTIVE' "
+                + "AND o.processing_state='NONE' AND o.price_per_unit<=10 "
+                + "AND maker_seq.sequence<incoming_seq.sequence "
+                + "ORDER BY o.price_per_unit,maker_seq.sequence LIMIT 1",
                 "idx_orders_match");
         assertPlanUses("SELECT order_id FROM auction_orders WHERE side='SELL' AND status='ACTIVE' "
                 + "AND processing_state='NONE' AND created_at<=10 ORDER BY created_at LIMIT 9",
@@ -247,6 +254,77 @@ class DatabaseTest {
     }
 
     /* ------------------------------ unified order book ------------------------------ */
+
+    @Test
+    void equalPriceFifoUsesDurableAcceptanceSequenceOnBothSides() {
+        OrderRepository repo = new OrderRepository();
+        MatchWorkRepository work = new MatchWorkRepository();
+        long sameTime = 123L;
+        Order sellFirst = orderWith(UUID.fromString("ffffffff-ffff-ffff-ffff-fffffffffff1"),
+                OrderSide.SELL, "fifo:sell", 32, sameTime);
+        Order sellSecond = orderWith(UUID.fromString("00000000-0000-0000-0000-000000000001"),
+                OrderSide.SELL, "fifo:sell", 32, sameTime);
+        Order incomingBuy = orderWith(UUID.randomUUID(), OrderSide.BUY, "fifo:sell", 35, sameTime);
+        Order buyFirst = orderWith(UUID.fromString("ffffffff-ffff-ffff-ffff-fffffffffff2"),
+                OrderSide.BUY, "fifo:buy", 35, sameTime);
+        Order buySecond = orderWith(UUID.fromString("00000000-0000-0000-0000-000000000002"),
+                OrderSide.BUY, "fifo:buy", 35, sameTime);
+        Order incomingSell = orderWith(UUID.randomUUID(), OrderSide.SELL, "fifo:buy", 32, sameTime);
+        db.inTransaction(c -> {
+            for (Order order : List.of(sellFirst, sellSecond, incomingBuy,
+                    buyFirst, buySecond, incomingSell)) {
+                repo.insert(c, order);
+                work.registerOrder(c, order.orderId());
+            }
+            return null;
+        });
+
+        Order selectedSell = db.query(c -> repo.bestCounterpart(c, "fifo:sell", OrderSide.BUY,
+                35, incomingBuy.ownerUuid(), true, incomingBuy.orderId())).orElseThrow();
+        Order selectedBuy = db.query(c -> repo.bestCounterpart(c, "fifo:buy", OrderSide.SELL,
+                32, incomingSell.ownerUuid(), true, incomingSell.orderId())).orElseThrow();
+
+        assertEquals(sellFirst.orderId(), selectedSell.orderId(),
+                "UUID order must not override SELL acceptance FIFO");
+        assertEquals(buyFirst.orderId(), selectedBuy.orderId(),
+                "UUID order must not override BUY acceptance FIFO");
+    }
+
+    @Test
+    void fileDatabaseCreatesMissingParentDirectory() {
+        Path databasePath = tempDir.resolve("new-world").resolve("vauction").resolve("auction.db");
+
+        try (DatabaseManager fileDb = DatabaseManager.openSqlite(databasePath)) {
+            fileDb.initialize();
+            assertEquals(5, fileDb.schemaVersion());
+        }
+
+        assertTrue(Files.isRegularFile(databasePath));
+    }
+
+    @Test
+    void acceptanceRegistrationAndMatchEnqueueAreIdempotent() {
+        Order existing = order(OrderSide.SELL, 32, 1, 1L);
+        MatchWorkRepository work = new MatchWorkRepository();
+        db.inTransaction(c -> {
+            new OrderRepository().insert(c, existing);
+            work.registerOrder(c, existing.orderId());
+            work.registerOrder(c, existing.orderId());
+            work.enqueue(c, existing.orderId(), existing.createdAt());
+            work.enqueue(c, existing.orderId(), existing.createdAt());
+            return null;
+        });
+        assertEquals(1, db.query(work::count));
+        assertEquals(1, db.query(c -> {
+            try (PreparedStatement ps = c.prepareStatement(
+                    "SELECT COUNT(*) FROM auction_order_acceptance WHERE order_id=?")) {
+                ps.setString(1, existing.orderId().toString());
+                try (ResultSet rs = ps.executeQuery()) {
+                    return rs.next() ? rs.getInt(1) : 0;
+                }
+            }
+        }).intValue());
+    }
 
     @Test
     void orderInsertRoundTripKeepsPriceAndAllQuantities() {
@@ -626,6 +704,12 @@ class DatabaseTest {
     private static Order order(OrderSide side, long price, int quantity, long createdAt) {
         return Order.newOrder(UUID.randomUUID(), side, "exact:key",
                 item("minecraft:copper_ingot"), price, quantity, createdAt).build();
+    }
+
+    private static Order orderWith(UUID id, OrderSide side, String marketKey,
+                                   long price, long createdAt) {
+        return Order.newOrder(UUID.randomUUID(), side, marketKey,
+                item("minecraft:copper_ingot"), price, 1, createdAt).orderId(id).build();
     }
 
     private static void applyResource(Connection c, String path) throws Exception {

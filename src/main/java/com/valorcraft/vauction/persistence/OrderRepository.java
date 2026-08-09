@@ -28,6 +28,7 @@ public final class OrderRepository {
             + "item_blob, item_codec_version, item_hash, item_registry_id, item_display_name, "
             + "item_search_name, item_snapshot_qty, price_per_unit, original_quantity, remaining_quantity, "
             + "filled_quantity, escrow_reference, ref_epoch, processing_state, created_at, updated_at, version";
+    private static final String QUALIFIED_COLUMNS = "o." + COLUMNS.replace(", ", ", o.");
 
     public void insert(Connection c, Order order) {
         String sql = "INSERT INTO auction_orders (order_id, owner_uuid, side, status, market_key, "
@@ -179,25 +180,56 @@ public final class OrderRepository {
         String pricePredicate = makerSide == OrderSide.SELL
                 ? "price_per_unit <= ?" : "price_per_unit >= ?";
         String priceOrder = makerSide == OrderSide.SELL ? "ASC" : "DESC";
-        String sql = "SELECT " + COLUMNS + " FROM auction_orders WHERE market_key=? AND side=? "
-                + "AND status='ACTIVE' AND processing_state='NONE' AND " + pricePredicate + " "
-                + "AND EXISTS (SELECT 1 FROM auction_order_acceptance maker_seq, "
-                + "auction_order_acceptance incoming_seq WHERE maker_seq.order_id=auction_orders.order_id "
-                + "AND incoming_seq.order_id=? AND maker_seq.sequence < incoming_seq.sequence) "
-                + (allowSelfTrade ? "" : "AND owner_uuid <> ? ")
-                + "ORDER BY price_per_unit " + priceOrder + ", created_at, order_id LIMIT 1";
+        String sql = "SELECT " + QUALIFIED_COLUMNS + " FROM auction_orders o "
+                + "JOIN auction_order_acceptance maker_seq ON maker_seq.order_id=o.order_id "
+                + "JOIN auction_order_acceptance incoming_seq ON incoming_seq.order_id=? "
+                + "WHERE o.market_key=? AND o.side=? AND o.status='ACTIVE' "
+                + "AND o.processing_state='NONE' AND o." + pricePredicate + " "
+                + "AND maker_seq.sequence < incoming_seq.sequence "
+                + (allowSelfTrade ? "" : "AND o.owner_uuid <> ? ")
+                + "ORDER BY o.price_per_unit " + priceOrder + ", maker_seq.sequence LIMIT 1";
         try (PreparedStatement ps = c.prepareStatement(sql)) {
             int i = 1;
+            ps.setString(i++, incomingOrderId.toString());
             ps.setString(i++, marketKey);
             ps.setString(i++, makerSide.name());
             ps.setLong(i++, incomingPrice);
-            ps.setString(i++, incomingOrderId.toString());
             if (!allowSelfTrade) ps.setString(i, incomingOwner.toString());
             try (ResultSet rs = ps.executeQuery()) {
                 return rs.next() ? Optional.of(map(rs)) : Optional.empty();
             }
         } catch (SQLException e) {
             throw new DatabaseException("best counterpart failed", e);
+        }
+    }
+
+    /** True when an older crossing maker exists but may currently hold a processing lock. */
+    public boolean hasOlderCrossingCounterpart(Connection c, String marketKey,
+                                                OrderSide incomingSide, long incomingPrice,
+                                                UUID incomingOwner, boolean allowSelfTrade,
+                                                UUID incomingOrderId) {
+        OrderSide makerSide = incomingSide == OrderSide.BUY ? OrderSide.SELL : OrderSide.BUY;
+        String pricePredicate = makerSide == OrderSide.SELL
+                ? "price_per_unit <= ?" : "price_per_unit >= ?";
+        String sql = "SELECT 1 FROM auction_orders o "
+                + "JOIN auction_order_acceptance maker_seq ON maker_seq.order_id=o.order_id "
+                + "JOIN auction_order_acceptance incoming_seq ON incoming_seq.order_id=? "
+                + "WHERE o.market_key=? AND o.side=? AND o.status='ACTIVE' AND o."
+                + pricePredicate + " AND maker_seq.sequence < incoming_seq.sequence "
+                + (allowSelfTrade ? "" : "AND o.owner_uuid <> ? ")
+                + "LIMIT 1";
+        try (PreparedStatement ps = c.prepareStatement(sql)) {
+            int i = 1;
+            ps.setString(i++, incomingOrderId.toString());
+            ps.setString(i++, marketKey);
+            ps.setString(i++, makerSide.name());
+            ps.setLong(i++, incomingPrice);
+            if (!allowSelfTrade) ps.setString(i, incomingOwner.toString());
+            try (ResultSet rs = ps.executeQuery()) {
+                return rs.next();
+            }
+        } catch (SQLException e) {
+            throw new DatabaseException("older crossing counterpart check failed", e);
         }
     }
 

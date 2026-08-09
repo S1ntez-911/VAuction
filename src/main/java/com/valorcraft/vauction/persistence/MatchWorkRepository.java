@@ -39,7 +39,7 @@ public final class MatchWorkRepository {
     public Optional<MatchWork> pollReady(Connection c, long now) {
         String sql = "SELECT work_id, order_id, created_at, next_attempt_at, attempt_count "
                 + "FROM auction_match_queue WHERE next_attempt_at <= ? "
-                + "ORDER BY created_at, work_id LIMIT 1";
+                + "ORDER BY next_attempt_at, created_at, work_id LIMIT 1";
         try (PreparedStatement ps = c.prepareStatement(sql)) {
             ps.setLong(1, now);
             try (ResultSet rs = ps.executeQuery()) {
@@ -80,6 +80,19 @@ public final class MatchWorkRepository {
             ps.executeUpdate();
         } catch (SQLException e) {
             throw new DatabaseException("delete matching work failed: " + workId, e);
+        }
+    }
+
+    public Optional<MatchWork> findByOrderId(Connection c, UUID orderId) {
+        String sql = "SELECT work_id, order_id, created_at, next_attempt_at, attempt_count "
+                + "FROM auction_match_queue WHERE order_id=?";
+        try (PreparedStatement ps = c.prepareStatement(sql)) {
+            ps.setString(1, orderId.toString());
+            try (ResultSet rs = ps.executeQuery()) {
+                return rs.next() ? Optional.of(map(rs)) : Optional.empty();
+            }
+        } catch (SQLException e) {
+            throw new DatabaseException("find matching work failed: " + orderId, e);
         }
     }
 

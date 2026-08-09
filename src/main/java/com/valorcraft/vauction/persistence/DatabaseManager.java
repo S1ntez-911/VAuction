@@ -3,6 +3,8 @@ package com.valorcraft.vauction.persistence;
 import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
 
+import java.io.IOException;
+import java.nio.file.Files;
 import java.nio.file.Path;
 
 /**
@@ -23,7 +25,16 @@ public final class DatabaseManager implements AutoCloseable {
     }
 
     public static DatabaseManager openSqlite(Path databasePath) {
-        SqliteJdbcSource source = new SqliteJdbcSource("jdbc:sqlite:" + databasePath);
+        Path absolutePath = databasePath.toAbsolutePath().normalize();
+        Path parent = absolutePath.getParent();
+        try {
+            if (parent != null) {
+                Files.createDirectories(parent);
+            }
+        } catch (IOException e) {
+            throw new DatabaseException("cannot create sqlite directory: " + parent, e);
+        }
+        SqliteJdbcSource source = new SqliteJdbcSource("jdbc:sqlite:" + absolutePath);
         source.open();
         return new DatabaseManager(source);
     }

@@ -1,5 +1,6 @@
 package com.valorcraft.vauction.bootstrap;
 
+import com.valorcraft.vauction.config.AuctionConfig;
 import net.minecraftforge.fml.common.Mod;
 import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
@@ -18,6 +19,7 @@ public final class VAuctionMod {
     public static final Logger LOGGER = LogManager.getLogger(MOD_NAME);
 
     public VAuctionMod() {
+        AuctionConfig.register();
         LOGGER.info("{} загружается (серверный аукцион, использует VEconomy)", MOD_NAME);
     }
 }

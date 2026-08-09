@@ -12,6 +12,7 @@ import com.valorcraft.vauction.item.ExactItemMarketKeyStrategy;
 import com.valorcraft.vauction.item.ItemStackCodec;
 import com.valorcraft.vauction.persistence.DatabaseManager;
 import com.valorcraft.vauction.persistence.DeliveryRepository;
+import com.valorcraft.vauction.persistence.MatchWorkRepository;
 import com.valorcraft.vauction.persistence.OperationRepository;
 import com.valorcraft.vauction.persistence.OrderRepository;
 import com.valorcraft.vauction.persistence.TradeRepository;
@@ -367,6 +368,73 @@ class AuctionServiceTest {
     }
 
     @Test
+    void newerSellKeepsContinuationWhileOlderCrossingBuyIsReserveLocked() {
+        UUID buyer = UUID.randomUUID();
+        economy.balances.put(buyer, 1_000L);
+        economy.transientReserveFailures = 1;
+        ItemStack item = new ItemStack(Items.COPPER_INGOT, 1);
+        AuctionService.Outcome buy = service.createBuyOrder(buyer, item, 35, 1);
+        assertEquals(AuctionService.Result.ACCEPTED_PENDING, buy.status());
+
+        AuctionService.Outcome sell = service.createSellOrder(UUID.randomUUID(), item, 30, 1);
+        service.pumpMatching(WorkBudget.operations(1), 1);
+        MatchWorkRepository.MatchWork deferred = db.query(c ->
+                new MatchWorkRepository().findByOrderId(c, sell.order().orderId())).orElseThrow();
+        assertTrue(deferred.attemptCount() > 0);
+
+        RecoveryService recovery = new RecoveryService(db, orders, trades, deliveries, economy, service);
+        assertEquals(1, recovery.scan().escrowsRestored());
+        service.pumpMatching(WorkBudget.operations(1), 1); // remove older BUY's own no-maker work
+        readyMatchWork(sell.order().orderId());
+        AuctionService.MatchingReport matched = service.pumpMatching(WorkBudget.operations(4), 1);
+
+        assertEquals(1, matched.trades().size());
+        assertEquals(35L, matched.trades().get(0).executionPrice());
+        assertEquals(com.valorcraft.vauction.domain.order.OrderSide.BUY,
+                matched.trades().get(0).makerSide());
+    }
+
+    @Test
+    void newerSellKeepsContinuationWhileOlderCrossingBuyIsFillLocked() {
+        UUID buyer = UUID.randomUUID();
+        economy.balances.put(buyer, 1_000L);
+        ItemStack item = new ItemStack(Items.COPPER_INGOT, 1);
+        AuctionService.Outcome buy = service.createBuyOrder(buyer, item, 35, 2);
+        service.pumpMatching(WorkBudget.operations(2), 1); // remove initial no-maker work
+
+        economy.transientSettleFailures = 1;
+        service.createSellOrder(UUID.randomUUID(), item, 30, 1);
+        service.pumpMatching(WorkBudget.operations(2), 1);
+        assertEquals(OrderProcessingState.FILL, db.query(c ->
+                orders.findById(c, buy.order().orderId())).orElseThrow().processingState());
+
+        AuctionService.Outcome secondSell = service.createSellOrder(UUID.randomUUID(), item, 30, 1);
+        service.pumpMatching(WorkBudget.operations(1), 1);
+        assertTrue(db.query(c -> new MatchWorkRepository()
+                .findByOrderId(c, secondSell.order().orderId())).isPresent());
+
+        RecoveryService recovery = new RecoveryService(db, orders, trades, deliveries, economy, service);
+        assertEquals(1, recovery.scan().fillsFinished());
+        readyMatchWork(secondSell.order().orderId());
+        AuctionService.MatchingReport matched = service.pumpMatching(WorkBudget.operations(4), 1);
+
+        assertEquals(1, matched.trades().size());
+        assertEquals(secondSell.order().orderId(), matched.trades().get(0).sellOrderId());
+        assertEquals(35L, matched.trades().get(0).executionPrice());
+        assertEquals(2, db.query(trades::findAll).stream()
+                .filter(t -> t.state() == TradeState.SETTLED).count());
+    }
+
+    @Test
+    void matchWorkIsDeletedWhenNoOlderCrossingMakerExists() {
+        AuctionService.Outcome sell = service.createSellOrder(UUID.randomUUID(),
+                new ItemStack(Items.COPPER_INGOT, 1), 30, 1);
+        service.pumpMatching(WorkBudget.operations(2), 1);
+        assertTrue(db.query(c -> new MatchWorkRepository()
+                .findByOrderId(c, sell.order().orderId())).isEmpty());
+    }
+
+    @Test
     void largeCrossIsBoundedPerPumpAndEventuallyCompletesFromDurableQueue() {
         ItemStack item = new ItemStack(Items.COPPER_INGOT, 1);
         for (int i = 0; i < 500; i++) {
@@ -612,6 +680,15 @@ class AuctionServiceTest {
         assertEquals(0, service.expirePass(Long.MAX_VALUE));
         assertEquals(OrderStatus.ACTIVE,
                 db.query(c -> orders.findById(c, sell.order().orderId())).orElseThrow().status());
+    }
+
+    private void readyMatchWork(UUID orderId) {
+        db.inTransaction(c -> {
+            MatchWorkRepository repository = new MatchWorkRepository();
+            MatchWorkRepository.MatchWork work = repository.findByOrderId(c, orderId).orElseThrow();
+            repository.readyNow(c, work.workId(), 0L);
+            return null;
+        });
     }
 
     private static final class FakeInventory implements InventoryOps {
