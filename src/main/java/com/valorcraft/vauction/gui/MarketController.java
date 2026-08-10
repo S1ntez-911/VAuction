@@ -9,6 +9,7 @@ import com.valorcraft.vauction.domain.market.MarketCard;
 import com.valorcraft.vauction.domain.market.MarketSummary;
 import com.valorcraft.vauction.domain.order.OrderSide;
 import com.valorcraft.vauction.domain.order.OrderStatus;
+import com.valorcraft.vauction.domain.trade.Trade;
 import net.minecraft.ChatFormatting;
 import net.minecraft.network.chat.Component;
 import net.minecraft.network.chat.ClickEvent;
@@ -207,7 +208,7 @@ public final class MarketController {
         if (s.orderSide == OrderSide.SELL) {
             int available = service().availableCount(player.getUUID(), s.unit);
             if (available <= 0) {
-                tell(player, "✕ Недостаточно предметов", ChatFormatting.RED);
+                MarketText.bar(player, "Не хватает предметов", MarketPalette.ERROR);
                 MarketSounds.error(player);
                 return;
             }
@@ -222,7 +223,7 @@ public final class MarketController {
     private void setMaximumQuantity(ServerPlayer player, MarketSession s) {
         int available = service().availableCount(player.getUUID(), s.unit);
         if (available <= 0) {
-            tell(player, "✕ Недостаточно предметов", ChatFormatting.RED);
+            MarketText.bar(player, "Не хватает предметов", MarketPalette.ERROR);
             MarketSounds.error(player);
             return;
         }
@@ -240,13 +241,13 @@ public final class MarketController {
         drafts.put(player.getUUID(), TradeDraft.of(s, target));
         player.sendSystemMessage(MarketText.brand());
         player.sendSystemMessage(MarketText.text(target == TradeDraft.InputTarget.PRICE
-                ? "Введите цену за штуку:" : "Укажите своё количество:"));
+                ? "Введите цену за штуку:" : "Введите количество:"));
         player.sendSystemMessage(Component.literal("/ah set <число>")
                 .withStyle(style -> style.withColor(MarketPalette.INFO)
                         .withClickEvent(new ClickEvent(ClickEvent.Action.SUGGEST_COMMAND, "/ah set "))));
         player.sendSystemMessage(MarketText.muted(target == TradeDraft.InputTarget.PRICE
-                ? "Заявка снова откроется с этой ценой."
-                : "Сделка снова откроется с этим количеством."));
+                ? "Заявка откроется заново."
+                : "Сделка откроется заново."));
         MarketSounds.preset(player, false);
     }
 
@@ -298,11 +299,11 @@ public final class MarketController {
             if (visual.isEmpty()) visual = new ItemStack(Items.BARRIER);
             MarketSummary m = card.summary();
             ItemStack icon = GuiItems.decorateMarketItem(visual, List.of(
-                    MarketText.labelValue("Можно купить", moneyOrUnavailable(m.bestAsk()), MarketPalette.SUCCESS),
-                    MarketText.labelValue("Можно продать", moneyOrUnavailable(m.bestBid()), MarketPalette.SELL),
-                    MarketText.labelValue("Последняя сделка", moneyOrDash(m.lastTradePrice()), MarketPalette.TEXT),
-                    Component.empty(), MarketText.colored("ЛКМ → купить", MarketPalette.SUCCESS),
-                    MarketText.colored("ПКМ → продать", MarketPalette.SELL)));
+                    MarketText.labelValue("Купить", moneyOrUnavailable(m.bestAsk()), MarketPalette.SUCCESS),
+                    MarketText.labelValue("Продать", moneyOrUnavailable(m.bestBid()), MarketPalette.SELL),
+                    MarketText.labelValue("Сделка", moneyOrDash(m.lastTradePrice()), MarketPalette.TEXT),
+                    Component.empty(), MarketText.colored("ЛКМ: купить", MarketPalette.SUCCESS),
+                    MarketText.colored("ПКМ: продать", MarketPalette.SELL)));
             put(box, s, CARD_SLOTS[i++], icon, GuiAction.trade(visual));
         }
         if (page.items().isEmpty() && s.screen == MarketScreen.SEARCH) {
@@ -310,12 +311,13 @@ public final class MarketController {
             box.setItem(22, GuiItems.namedButton(new ItemStack(Items.COMPASS),
                     MarketText.action("◆ Ничего не найдено", MarketPalette.WARNING),
                     List.of(MarketText.muted("Товар пока не торгуется."),
-                            MarketText.muted("Первую заявку можно создать через /ah buy или /ah sell."))));
+                            MarketText.muted("Создайте первую заявку:"),
+                            MarketText.muted("/ah buy или /ah sell"))));
         } else if (page.items().isEmpty()) {
             box.setItem(22, GuiItems.namedButton(new ItemStack(Items.PAPER),
                     MarketText.text("На бирже пока нет товаров."), List.of(
-                            MarketText.muted("Используйте /ah sell или /ah buy,"),
-                            MarketText.muted("чтобы создать первую заявку."))));
+                            MarketText.muted("Создайте первую заявку:"),
+                            MarketText.muted("/ah buy или /ah sell"))));
         }
         if (s.screen == MarketScreen.SEARCH) searchNavigation(box, s, page);
         else catalogueNavigation(box, s, page);
@@ -373,38 +375,32 @@ public final class MarketController {
         MarketSummary summary = market == null ? null : market.card().summary();
         lore.add(MarketText.action(buy ? "ПОКУПКА" : "ПРОДАЖА",
                 buy ? MarketPalette.SUCCESS : MarketPalette.SELL));
-        lore.add(MarketText.labelValue(buy ? "Сейчас от" : "Сейчас покупают",
-                moneyOrUnavailable(summary == null ? 0 : (buy
-                        ? summary.bestAsk() : summary.bestBid())), MarketPalette.TEXT));
-        if (!buy) {
-            lore.add(MarketText.labelValue("У вас", Integer.toString(available), MarketPalette.TEXT));
-        }
-        lore.add(Component.empty());
-        lore.add(MarketText.labelValue("Количество", Integer.toString(quote.requestedQuantity()), MarketPalette.TEXT));
+        lore.add(MarketText.labelValue("Цена", moneyOrUnavailable(summary == null ? 0 : (buy
+                ? summary.bestAsk() : summary.bestBid())), MarketPalette.TEXT));
+        lore.add(MarketText.labelValue("Кол-во", Integer.toString(quote.requestedQuantity()), MarketPalette.TEXT));
         if (quote.fillableQuantity() < quote.requestedQuantity()) {
-            lore.add(MarketText.labelValue("Доступно", quote.fillableQuantity() + " из "
+            lore.add(MarketText.labelValue("Частично", quote.fillableQuantity() + " из "
                     + quote.requestedQuantity(), MarketPalette.WARNING));
         }
         if (quote.executable()) {
             lore.add(MarketText.labelValue(buy ? "Итого" : "Получите",
                     CurrencyText.format(quote.expectedTotal()), MarketPalette.TEXT));
-            if (quote.insufficientLiquidity()) {
-                lore.add(MarketText.muted("Остаток не станет ожидающей заявкой."));
-            }
+            lore.add(MarketText.labelValue(buy ? "До" : "Не ниже",
+                    CurrencyText.format(quote.worstExecutionPrice()) + " / шт.", MarketPalette.TEXT));
         } else {
-            lore.add(MarketText.colored("Сейчас нет подходящих предложений.", MarketPalette.WARNING));
+            lore.add(MarketText.colored("Нет предложений", MarketPalette.WARNING));
         }
         box.setItem(13, GuiItems.decorateMarketItem(s.unit, lore));
         quantityControls(box, s, s.orderSide);
-        put(box, s, TRADE_BACK, button(MarketIcons.BACK, "Назад", "К каталогу"), GuiAction.simple(GuiAction.Type.BACK));
-        put(box, s, TRADE_SECONDARY, button(MarketIcons.MODE_SWITCH, "Своя цена", "Заявка будет ждать подходящего предложения"),
+        put(box, s, TRADE_BACK, button(MarketIcons.BACK, "Назад", "Каталог"), GuiAction.simple(GuiAction.Type.BACK));
+        put(box, s, TRADE_SECONDARY, button(MarketIcons.MODE_SWITCH, "Своя цена", "Ждать по своей цене"),
                 GuiAction.simple(buy ? GuiAction.Type.BUY : GuiAction.Type.SELL));
         if (quote.executable()) {
             put(box, s, TRADE_PRIMARY, button(buy ? MarketIcons.PRIMARY_BUY : MarketIcons.PRIMARY_SELL,
                     MarketText.action(buy ? "✓ Купить сейчас" : "✓ Продать сейчас",
                             buy ? MarketPalette.SUCCESS : MarketPalette.SELL),
                     List.of(MarketText.muted(buy
-                            ? "Не дороже показанной цены" : "Не дешевле показанной цены"))),
+                            ? "Не дороже цены" : "Не дешевле цены"))),
                     GuiAction.simple(GuiAction.Type.CONFIRM_IMMEDIATE));
         } else {
             put(box, s, TRADE_PRIMARY, button(MarketIcons.DISABLED, "Нет предложений", ""), null);
@@ -425,7 +421,8 @@ public final class MarketController {
             }
             long balance = VAuctionCore.instance().economyGateway().getBalance(player.getUUID());
             if (balance < reserve) {
-                tell(player, "Недостаточно средств. Нужно до: " + CurrencyText.format(reserve)
+                MarketText.bar(player, "Не хватает денег", MarketPalette.ERROR);
+                tell(player, "Нужно до: " + CurrencyText.format(reserve)
                         + ", доступно: " + CurrencyText.format(balance) + ". Уменьшите количество.",
                         ChatFormatting.RED);
                 return;
@@ -437,20 +434,27 @@ public final class MarketController {
                 : service().executeSellNow(player.getUUID(), s.unit, quote.worstExecutionPrice(),
                         quote.fillableQuantity(), s.pendingRequestId);
         long filled = outcome.filledQuantity();
+        boolean buy = s.orderSide == OrderSide.BUY;
         if (outcome.isSuccess()) MarketSounds.success(player); else MarketSounds.error(player);
         if (!outcome.isSuccess()) {
+            MarketText.bar(player, "Не получилось", MarketPalette.ERROR);
             showOutcome(player, outcome);
         } else if (filled == 0) {
-            tell(player, s.orderSide == OrderSide.BUY
+            MarketText.bar(player, "Нет предложений", MarketPalette.WARNING);
+            tell(player, buy
                             ? "Рынок изменился: по подтверждённой цене ничего не куплено. Средства освобождены."
-                            : "Рынок изменился: по подтверждённой цене ничего не продано. Предметы доступны в «Моём».",
+                            : "Рынок изменился: по подтверждённой цене ничего не продано. Предметы — в «Моём».",
                     ChatFormatting.YELLOW);
-        } else if (s.orderSide == OrderSide.BUY) {
-            tell(player, "Куплено: " + filled + " " + s.unit.getHoverName().getString()
-                    + ". Предметы готовы в «Моём».", ChatFormatting.GREEN);
+        } else if (buy) {
+            MarketText.bar(player, "Куплено: " + filled + " шт. за "
+                    + CurrencyText.format(tradeAmount(outcome.trades(), true)), MarketPalette.SUCCESS);
+            tell(player, s.unit.getHoverName().getString() + " — в «Моём».", ChatFormatting.GREEN);
         } else {
-            tell(player, "Продано: " + filled + " " + s.unit.getHoverName().getString()
-                    + ". Неисполненный остаток доступен в «Моём».", ChatFormatting.GREEN);
+            MarketText.bar(player, "Продано: " + filled + " шт. за "
+                    + CurrencyText.format(tradeAmount(outcome.trades(), false)), MarketPalette.SUCCESS);
+            if (filled < quote.fillableQuantity()) {
+                tell(player, "Неисполненный остаток — в «Моём».", ChatFormatting.GREEN);
+            }
         }
         s.pendingRequestId = null;
         s.immediate = false;
@@ -496,24 +500,24 @@ public final class MarketController {
         box.setItem(13, GuiItems.decorateMarketItem(s.unit, List.of(
                 MarketText.action(s.orderSide == OrderSide.BUY ? "ЗАЯВКА НА ПОКУПКУ" : "ЗАЯВКА НА ПРОДАЖУ",
                         s.orderSide == OrderSide.BUY ? MarketPalette.SUCCESS : MarketPalette.SELL),
-                MarketText.labelValue("Количество", Integer.toString(s.quantity), MarketPalette.TEXT),
-                MarketText.labelValue("Цена за штуку", CurrencyText.format(s.price), MarketPalette.TEXT),
-                MarketText.labelValue(s.orderSide == OrderSide.BUY ? "Резерв" : "Сумма заявки",
+                MarketText.labelValue("Кол-во", Integer.toString(s.quantity), MarketPalette.TEXT),
+                MarketText.labelValue("Цена", CurrencyText.format(s.price) + " / шт.", MarketPalette.TEXT),
+                MarketText.labelValue(s.orderSide == OrderSide.BUY ? "Резерв" : "Сумма",
                         CurrencyText.format(total), MarketPalette.TEXT),
                 s.orderSide == OrderSide.SELL
                         ? MarketText.labelValue("Доступно", Integer.toString(service().availableCount(player.getUUID(), s.unit)), MarketPalette.TEXT)
-                        : MarketText.muted("Средства резервируются после подтверждения"))));
+                        : MarketText.muted("Спишется позже"))));
         quantityControls(box, s, s.orderSide);
-        put(box, s, PRICE_INFO, button(MarketIcons.PRICE_INFO, "Изменить цену", "Указать свою цену за штуку"),
+        put(box, s, PRICE_INFO, button(MarketIcons.PRICE_INFO, "Изменить цену", "Своя цена"),
                 GuiAction.simple(GuiAction.Type.EXACT_PRICE));
-        put(box, s, TRADE_BACK, button(MarketIcons.BACK, "Назад", "К каталогу"), GuiAction.simple(GuiAction.Type.BACK));
+        put(box, s, TRADE_BACK, button(MarketIcons.BACK, "Назад", "Каталог"), GuiAction.simple(GuiAction.Type.BACK));
         put(box, s, TRADE_SECONDARY, button(MarketIcons.MODE_SWITCH,
-                buy ? "Купить сейчас" : "Продать сейчас", "Вернуться к рыночной цене"),
+                buy ? "Купить сейчас" : "Продать сейчас", "По рынку"),
                 GuiAction.simple(buy ? GuiAction.Type.BUY_NOW : GuiAction.Type.SELL_NOW));
         put(box, s, TRADE_PRIMARY, button(MarketIcons.SUBMIT_LIMIT,
-                MarketText.action("✓ Выставить заявку",
+                MarketText.action("Выставить",
                         buy ? MarketPalette.SUCCESS : MarketPalette.SELL),
-                List.of(MarketText.muted("Создать заявку по указанной цене"))), GuiAction.simple(GuiAction.Type.REVIEW));
+                List.of(MarketText.muted("Заявка по указанной цене"))), GuiAction.simple(GuiAction.Type.REVIEW));
         openBox(player, s, box, "Биржа ValorCraft");
     }
 
@@ -561,7 +565,8 @@ public final class MarketController {
             }
             long balance = VAuctionCore.instance().economyGateway().getBalance(player.getUUID());
             if (balance < needed) {
-                tell(player, "Недостаточно средств. Нужно: " + CurrencyText.format(needed)
+                MarketText.bar(player, "Не хватает денег", MarketPalette.ERROR);
+                tell(player, "Нужно: " + CurrencyText.format(needed)
                         + ", доступно: " + CurrencyText.format(balance) + ". Уменьшите цену или количество.",
                         ChatFormatting.RED);
                 return;
@@ -571,15 +576,21 @@ public final class MarketController {
         } else {
             int available = service().availableCount(player.getUUID(), s.unit);
             if (available < s.quantity) {
-                tell(player, "Недостаточно " + s.unit.getHoverName().getString() + ". Нужно: "
-                        + s.quantity + ", у вас: " + available + ". Уменьшите количество.", ChatFormatting.RED);
+                MarketText.bar(player, "Не хватает предметов", MarketPalette.ERROR);
+                tell(player, "Нужно: " + s.quantity + ", у вас: " + available
+                        + ". Уменьшите количество.", ChatFormatting.RED);
                 return;
             }
             outcome = service().createSellOrderFromInventory(player, s.unit, s.price,
                     s.quantity, s.pendingRequestId);
         }
         showOutcome(player, outcome);
-        if (outcome.isSuccess()) MarketSounds.success(player); else MarketSounds.error(player);
+        if (outcome.isSuccess()) {
+            MarketSounds.placed(player);
+            MarketText.bar(player, "Заявка создана", MarketPalette.SUCCESS);
+        } else {
+            MarketSounds.error(player);
+        }
         s.screen = MarketScreen.MY;
         s.page = 0;
         renderMy(player, s);
@@ -600,16 +611,16 @@ public final class MarketController {
             if (entry.claimable()) {
                 icon = GuiItems.decorateMarketItem(visual, List.of(
                         MarketText.action("Готово к получению", MarketPalette.INFO),
-                        MarketText.labelValue("Количество", Integer.toString(entry.item().quantity()), MarketPalette.TEXT),
+                        MarketText.labelValue("Кол-во", Integer.toString(entry.item().quantity()), MarketPalette.TEXT),
                         MarketText.muted(entry.deliveryType() == com.valorcraft.vauction.domain.delivery.DeliveryType.PURCHASED
-                                ? "Покупка на бирже" : "Возврат после заявки"),
-                        MarketText.colored("ЛКМ → забрать", MarketPalette.SUCCESS)));
+                                ? "Покупка" : "Возврат"),
+                        MarketText.colored("ЛКМ: забрать", MarketPalette.SUCCESS)));
                 action = GuiAction.delivery(entry.deliveryId());
             } else {
                 boolean buy = entry.side() == OrderSide.BUY;
                 boolean manual = entry.orderStatus() == OrderStatus.MANUAL_REVIEW;
-                String status = manual ? "⚠ Нужна проверка администратора"
-                        : entry.filledQuantity() > 0 ? "Частично исполнено: " + entry.filledQuantity() + " из " + entry.originalQuantity()
+                String status = manual ? "Нужна проверка"
+                        : entry.filledQuantity() > 0 ? "Частично: " + entry.filledQuantity() + " из " + entry.originalQuantity()
                         : buy ? "Ждёт продавца" : "Ждёт покупателя";
                 icon = GuiItems.decorateMarketItem(visual, List.of(
                         MarketText.action(buy ? "Покупка" : "Продажа",
@@ -617,7 +628,7 @@ public final class MarketController {
                         MarketText.labelValue("Цена", CurrencyText.format(entry.pricePerUnit()), MarketPalette.TEXT),
                         MarketText.labelValue("Осталось", entry.remainingQuantity() + " из " + entry.originalQuantity(), MarketPalette.TEXT),
                         MarketText.colored(status, manual ? MarketPalette.WARNING : MarketPalette.MUTED),
-                        entry.manageable() ? MarketText.muted("ЛКМ → управление") : MarketText.muted("Ожидает проверки")));
+                        entry.manageable() ? MarketText.muted("ЛКМ: управление") : MarketText.muted("Ожидает проверки")));
                 action = entry.manageable() ? GuiAction.manage(entry.orderId(), visual, buy,
                         entry.remainingQuantity(), entry.pricePerUnit()) : null;
             }
@@ -646,7 +657,7 @@ public final class MarketController {
                         s.orderSide == OrderSide.BUY ? MarketPalette.SUCCESS : MarketPalette.SELL),
                 MarketText.labelValue("Цена", CurrencyText.format(s.price), MarketPalette.TEXT),
                 MarketText.labelValue("Осталось", Integer.toString(s.quantity), MarketPalette.TEXT))));
-        put(box, s, TRADE_BACK, button(MarketIcons.BACK, "Назад", "К Моему"), GuiAction.simple(GuiAction.Type.BACK));
+        put(box, s, TRADE_BACK, button(MarketIcons.BACK, "Назад", "Моё"), GuiAction.simple(GuiAction.Type.BACK));
         put(box, s, TRADE_PRIMARY, button(MarketIcons.CANCEL, "Отменить заявку", "Остаток будет возвращён"),
                 GuiAction.simple(GuiAction.Type.PREPARE_CANCEL));
         openBox(player, s, box, "Биржа ValorCraft");
@@ -657,7 +668,7 @@ public final class MarketController {
         s.resetActions();
         box.setItem(22, GuiItems.namedButton(new ItemStack(Items.BARRIER),
                 MarketText.action("Отменить заявку?", MarketPalette.ERROR),
-                List.of(MarketText.text("Остаток заявки будет возвращён."),
+                List.of(MarketText.text("Остаток вернётся в «Моё»."),
                         MarketText.muted("Предметы появятся в «Моём»."))));
         put(box, s, TRADE_BACK, button(MarketIcons.BACK, "Назад", "Не отменять"), GuiAction.simple(GuiAction.Type.BACK));
         put(box, s, TRADE_PRIMARY, button(MarketIcons.CANCEL,
@@ -669,8 +680,15 @@ public final class MarketController {
     private void confirmCancel(ServerPlayer player, MarketSession s) {
         if (s.pendingCancelId == null) return;
         AuctionService.Outcome outcome = service().cancel(player.getUUID(), s.pendingCancelId, "market-gui");
-        if (outcome.isSuccess()) MarketSounds.cancel(player); else MarketSounds.error(player);
-        showOutcome(player, outcome);
+        if (outcome.isSuccess() || outcome.status() == AuctionService.Result.ACCEPTED_PENDING) {
+            MarketSounds.cancel(player);
+            MarketText.bar(player, "Заявка отменена", MarketPalette.SUCCESS);
+            tell(player, "Возврат — в «Моём».", ChatFormatting.GREEN);
+        } else {
+            MarketSounds.error(player);
+            MarketText.bar(player, "Не получилось", MarketPalette.ERROR);
+            showOutcome(player, outcome);
+        }
         s.pendingCancelId = null;
         s.screen = MarketScreen.MY;
         renderMy(player, s);
@@ -678,8 +696,14 @@ public final class MarketController {
 
     private void claim(ServerPlayer player, MarketSession s, long deliveryId) {
         AuctionService.Outcome outcome = service().claimDelivery(player.getUUID(), deliveryId);
-        if (outcome.isSuccess()) MarketSounds.claim(player); else MarketSounds.error(player);
-        showOutcome(player, outcome);
+        if (outcome.isSuccess()) {
+            MarketSounds.claim(player);
+            MarketText.bar(player, "Получено из биржи", MarketPalette.SUCCESS);
+        } else {
+            MarketSounds.error(player);
+            MarketText.bar(player, "Не получилось", MarketPalette.ERROR);
+            showOutcome(player, outcome);
+        }
         renderMy(player, s);
     }
 
@@ -792,11 +816,11 @@ public final class MarketController {
         if (multi) {
             lore.add(MarketText.labelValue("Страница", (page.page() + 1) + " / " + page.totalPages(),
                     MarketPalette.TEXT));
-            lore.add(MarketText.muted("ЛКМ → купить · ПКМ → продать"));
+            lore.add(MarketText.muted("ЛКМ: купить · ПКМ: продать"));
         } else {
             lore.add(MarketText.text("Биржа"));
-            lore.add(MarketText.muted("ЛКМ по товару → купить"));
-            lore.add(MarketText.muted("ПКМ по товару → продать"));
+            lore.add(MarketText.muted("ЛКМ: купить"));
+            lore.add(MarketText.muted("ПКМ: продать"));
         }
         put(box, s, NAV_INFO, GuiItems.namedButton(new ItemStack(MarketIcons.INFO_BOOK),
                 MarketText.colored("Биржа", MarketPalette.BRAND), lore), null);
@@ -838,10 +862,10 @@ public final class MarketController {
         } else {
             quantityPreset(box, s, 21, 1);
             put(box, s, 22, button(MarketIcons.ALL, MarketText.action("Всё", MarketPalette.SELL),
-                    List.of(MarketText.muted("Всё доступное сейчас"))), GuiAction.simple(GuiAction.Type.SET_MAX_QUANTITY));
+                    List.of(MarketText.muted("Всё что есть"))), GuiAction.simple(GuiAction.Type.SET_MAX_QUANTITY));
         }
         put(box, s, 23, button(MarketIcons.EXACT, MarketText.action("Другое", MarketPalette.TEXT),
-                List.of(MarketText.muted("Указать своё количество"))),
+                List.of(MarketText.muted("Своё количество"))),
                 GuiAction.simple(GuiAction.Type.EXACT_QUANTITY));
     }
 
@@ -880,22 +904,31 @@ public final class MarketController {
         return amount <= 0 ? "нет предложений" : CurrencyText.format(amount);
     }
 
+    /** Итоговая сумма сделки: покупатель платит gross, продавец получает net после комиссии. */
+    private static long tradeAmount(List<Trade> trades, boolean buyerPays) {
+        long total = 0;
+        try {
+            for (Trade t : trades) {
+                total = Math.addExact(total, buyerPays ? t.grossMinor() : t.sellerNet());
+            }
+        } catch (ArithmeticException e) {
+            return 0;
+        }
+        return total;
+    }
+
     private static void showOutcome(ServerPlayer player, AuctionService.Outcome outcome) {
         if (outcome.status() == AuctionService.Result.ACCEPTED_PENDING) {
             tell(player, "⏱ Заявка принята и безопасно завершается.", ChatFormatting.YELLOW);
         } else if (outcome.isSuccess()) {
-            if (outcome.order() == null) {
-                tell(player, "✓ Готово", ChatFormatting.GREEN);
-            } else if (outcome.order().status() == OrderStatus.CANCELLED) {
-                tell(player, "✓ Заявка отменена; возврат доступен в «Моём».", ChatFormatting.GREEN);
-            } else if (outcome.order().remainingQuantity() == 0) {
+            if (outcome.order().remainingQuantity() == 0) {
                 tell(player, "✓ Заявка исполнена полностью.", ChatFormatting.GREEN);
             } else if (outcome.filledQuantity() > 0) {
                 tell(player, "Исполнено " + outcome.filledQuantity() + ", осталось "
                         + outcome.order().remainingQuantity() + "; заявка продолжает ждать.",
                         ChatFormatting.GREEN);
             } else {
-                tell(player, "✓ Заявка создана и ждёт подходящего предложения.", ChatFormatting.GREEN);
+                tell(player, "✓ Создана и ждёт подходящего предложения.", ChatFormatting.GREEN);
             }
         } else {
             String friendly = switch (outcome.status()) {
@@ -916,7 +949,8 @@ public final class MarketController {
 
     private static void onboarding(ServerPlayer player) {
         player.sendSystemMessage(MarketText.brand());
-        player.sendSystemMessage(MarketText.text("ЛКМ по товару — купить, ПКМ — продать."));
+        player.sendSystemMessage(MarketText.text("ЛКМ по товару — купить."));
+        player.sendSystemMessage(MarketText.text("ПКМ по товару — продать."));
         player.sendSystemMessage(Component.literal("[Помощь]")
                 .withStyle(style -> style.withColor(MarketPalette.INFO)
                         .withClickEvent(new ClickEvent(ClickEvent.Action.RUN_COMMAND, "/ah help"))));
@@ -924,8 +958,8 @@ public final class MarketController {
 
     private static void tutorial(ServerPlayer player) {
         player.sendSystemMessage(MarketText.brand());
-        player.sendSystemMessage(MarketText.muted("«Купить/Продать сейчас» использует текущие предложения."));
-        player.sendSystemMessage(MarketText.muted("«Своя цена» создаёт заявку, которая будет ждать игрока."));
+        player.sendSystemMessage(MarketText.muted("«Купить/Продать сейчас» — по рынку."));
+        player.sendSystemMessage(MarketText.muted("«Своя цена» — заявка-ожидание."));
         player.sendSystemMessage(Component.literal("[Подробные команды]")
                 .withStyle(style -> style.withColor(MarketPalette.INFO)
                         .withClickEvent(new ClickEvent(ClickEvent.Action.RUN_COMMAND, "/ah help"))));

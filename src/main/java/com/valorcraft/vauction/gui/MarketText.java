@@ -3,6 +3,7 @@ package com.valorcraft.vauction.gui;
 import net.minecraft.network.chat.Component;
 import net.minecraft.network.chat.MutableComponent;
 import net.minecraft.network.chat.TextColor;
+import net.minecraft.server.level.ServerPlayer;
 
 final class MarketText {
     private MarketText() {}
@@ -31,5 +32,15 @@ final class MarketText {
 
     static Component colored(String text, TextColor color) {
         return Component.literal(text).withStyle(style -> style.withColor(color));
+    }
+
+    /** Короткая ровная строка-разделитель между блоком биржи и нативным tooltip предмета. */
+    static Component divider() {
+        return colored("────────", MarketPalette.SEPARATOR);
+    }
+
+    /** Мигающая строка в action bar (server-side). */
+    static void bar(ServerPlayer player, String text, TextColor color) {
+        player.displayClientMessage(colored(text, color), true);
     }
 }

@@ -306,7 +306,7 @@ class ServerOnlyGuiStructureTest {
         assertFalse(controller.contains("/ah quantity <число>"));
         assertFalse(controller.contains("/ah price <число>"));
         assertTrue(controller.contains("private void beginExactInput"));
-        assertTrue(controller.contains("Укажите своё количество:"));
+        assertTrue(controller.contains("Введите количество:"));
         assertTrue(controller.contains("Введите цену за штуку:"));
         assertTrue(controller.contains("draft.expectedInput == TradeDraft.InputTarget.PRICE"));
         assertTrue(controller.contains("reopenFromDraft(player, draft)"));
@@ -353,8 +353,8 @@ class ServerOnlyGuiStructureTest {
         assertTrue(actions.contains("OPEN_TRADE"));
         assertFalse(actions.contains("OPEN_MARKET"));
         assertTrue(controller.contains("button == 1 ? OrderSide.SELL : OrderSide.BUY"));
-        assertTrue(controller.contains("MarketText.colored(\"ЛКМ → купить\""));
-        assertTrue(controller.contains("MarketText.colored(\"ПКМ → продать\""));
+        assertTrue(controller.contains("MarketText.colored(\"ЛКМ: купить\""));
+        assertTrue(controller.contains("MarketText.colored(\"ПКМ: продать\""));
         assertFalse(controller.contains("private void renderMarket("));
         assertFalse(controller.contains("private static void levelItems("));
     }
@@ -370,7 +370,7 @@ class ServerOnlyGuiStructureTest {
         assertTrue(controller.contains("private void renderImmediateQuote"));
         assertTrue(controller.contains("private void renderEditor"));
         assertTrue(controller.contains("Своя цена"));
-        assertTrue(controller.contains("✓ Выставить заявку"));
+        assertTrue(controller.contains("MarketText.action(\"Выставить\""));
         assertTrue(controller.contains("confirmOrder(player, s);"), "normal limit submission has no mandatory confirmation page");
         assertTrue(controller.contains("createBuyOrder(player.getUUID(), s.unit"));
         assertTrue(controller.contains("createSellOrderFromInventory(player, s.unit"));
@@ -387,7 +387,8 @@ class ServerOnlyGuiStructureTest {
         assertFalse(editor.contains("-10%"));
         assertFalse(editor.contains("+10%"));
         assertFalse(editor.contains("ADJUST_PRICE_PERCENT"));
-        assertTrue(editor.contains("Цена за штуку"));
+        assertTrue(editor.contains("labelValue(\"Цена\""));
+        assertTrue(editor.contains("/ шт."));
         assertTrue(editor.contains("Изменить цену"));
         assertEquals(1, count(editor, "put(box, s, PRICE_INFO"),
                 "price editing must be a single button, not a row of controls");
@@ -397,10 +398,13 @@ class ServerOnlyGuiStructureTest {
     void immediateScreenKeepsSemanticBottomThreeAndTradeInfoOnTheItem() throws Exception {
         String controller = source("com/valorcraft/vauction/gui/MarketController.java");
         String immediate = between(controller, "private void renderImmediateQuote", "private void confirmImmediate");
-        assertTrue(immediate.contains("Сейчас от"));
-        assertTrue(immediate.contains("Сейчас покупают"));
+        assertTrue(immediate.contains("labelValue(\"Цена\""));
+        assertTrue(immediate.contains("labelValue(\"Кол-во\""));
         assertTrue(immediate.contains("Итого"));
         assertTrue(immediate.contains("Получите"));
+        assertTrue(immediate.contains("labelValue(buy ? \"До\" : \"Не ниже\""));
+        assertTrue(immediate.contains("Частично"));
+        assertTrue(immediate.contains("Нет предложений"));
         assertFalse(immediate.contains("Можно купить"), "liquidity lives on the item tooltip, not in controls");
         assertFalse(immediate.contains("Макс. цена"));
         assertFalse(immediate.contains("Мин. цена"));
@@ -428,15 +432,16 @@ class ServerOnlyGuiStructureTest {
     @Test
     void catalogueCardsUseActionLabelsAndHumanStatuses() throws Exception {
         String controller = source("com/valorcraft/vauction/gui/MarketController.java");
-        assertTrue(controller.contains("labelValue(\"Можно купить\""),
+        assertTrue(controller.contains("labelValue(\"Купить\""),
                 "card price labels must not collide with the action button name");
-        assertTrue(controller.contains("labelValue(\"Можно продать\""));
+        assertTrue(controller.contains("labelValue(\"Продать\""));
+        assertTrue(controller.contains("labelValue(\"Сделка\""));
         assertFalse(controller.contains("labelValue(\"Купить сейчас\""));
         assertFalse(controller.contains("labelValue(\"Продать сейчас\""));
         assertTrue(controller.contains("Ждёт продавца"));
         assertTrue(controller.contains("Ждёт покупателя"));
-        assertTrue(controller.contains("Частично исполнено"));
-        assertTrue(controller.contains("Нужна проверка администратора"));
+        assertTrue(controller.contains("Частично: "));
+        assertTrue(controller.contains("Нужна проверка"));
         assertFalse(controller.contains("Ожидает продавца"), "statuses must sound human, not exchange-like");
         assertFalse(controller.contains("Ожидает покупателя"));
     }
@@ -458,6 +463,38 @@ class ServerOnlyGuiStructureTest {
         assertTrue(vocabulary.contains("\"ingot\""));
         assertTrue(vocabulary.contains("\"руда\""));
         assertTrue(vocabulary.contains("\"ore\""));
+    }
+
+    @Test
+    void feedbackUsesServerSideActionBarAndSeparatorBeforeNativeTooltip() throws Exception {
+        String controller = source("com/valorcraft/vauction/gui/MarketController.java");
+        String items = source("com/valorcraft/vauction/gui/GuiItems.java");
+        String text = source("com/valorcraft/vauction/gui/MarketText.java");
+        String palette = source("com/valorcraft/vauction/gui/MarketPalette.java");
+        String sounds = source("com/valorcraft/vauction/gui/MarketSounds.java");
+        assertTrue(text.contains("static void bar(ServerPlayer player, String text, TextColor color)"));
+        assertTrue(text.contains("displayClientMessage"));
+        assertTrue(text.contains("divider()"));
+        assertTrue(text.contains("────────"));
+        assertTrue(palette.contains("SEPARATOR"));
+        assertTrue(items.contains("MarketText.divider()"), "decorator must close the exchange block with a separator");
+        assertTrue(items.indexOf("for (Component line : marketLines)")
+                        < items.indexOf("MarketText.divider()"),
+                "separator line goes after the last exchange line");
+        assertTrue(controller.contains("bar(player, \"Куплено: \" + filled + \" шт. за \""));
+        assertTrue(controller.contains("bar(player, \"Продано: \" + filled + \" шт. за \""));
+        assertTrue(controller.contains("bar(player, \"Заявка создана\", MarketPalette.SUCCESS)"));
+        assertTrue(controller.contains("bar(player, \"Получено из биржи\", MarketPalette.SUCCESS)"));
+        assertTrue(controller.contains("bar(player, \"Заявка отменена\", MarketPalette.SUCCESS)"));
+        assertTrue(controller.contains("bar(player, \"Нет предложений\", MarketPalette.WARNING)"));
+        assertTrue(controller.contains("bar(player, \"Не хватает денег\", MarketPalette.ERROR)"));
+        assertTrue(controller.contains("bar(player, \"Не хватает предметов\", MarketPalette.ERROR)"));
+        assertTrue(controller.contains("bar(player, \"Не получилось\", MarketPalette.ERROR)"));
+        assertTrue(sounds.contains("static void placed("), "calm placed-sound distinct from instant-trade success");
+        assertTrue(controller.contains("MarketSounds.placed(player)"));
+        assertTrue(controller.contains("tradeAmount(outcome.trades(), true)"), "buy total = buyer-paid gross");
+        assertTrue(controller.contains("tradeAmount(outcome.trades(), false)"), "sell total = seller net");
+        assertTrue(controller.contains("t.sellerNet()"));
     }
 
     private static int count(String source, String needle) {

@@ -53,8 +53,10 @@ class GuiItemsTest {
         assertEquals(before, source.save(new CompoundTag()), "decorator must not mutate the clean source");
         ListTag lore = decorated.getTagElement("display").getList("Lore", CompoundTag.TAG_STRING);
         assertTrue(lore.getString(0).contains("Качество: высокое"));
-        assertTrue(lore.getString(lore.size() - 2).contains("Купить: 32"));
-        assertTrue(lore.getString(lore.size() - 1).contains("ЛКМ — открыть"));
+        assertTrue(lore.getString(lore.size() - 3).contains("Купить: 32"));
+        assertTrue(lore.getString(lore.size() - 2).contains("ЛКМ — открыть"));
+        assertTrue(lore.getString(lore.size() - 1).contains("────────"),
+                "the separator must be the last line before the native tooltip");
     }
 
     @Test

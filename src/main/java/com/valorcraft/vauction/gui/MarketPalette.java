@@ -12,6 +12,8 @@ final class MarketPalette {
     static final TextColor WARNING = TextColor.fromRgb(0xFFD35B);
     static final TextColor ERROR = TextColor.fromRgb(0xFF6B6B);
     static final TextColor INFO = TextColor.fromRgb(0x6CB4EE);
+    /** Dark grey divider between the exchange block and the native item tooltip. */
+    static final TextColor SEPARATOR = TextColor.fromRgb(0x5A5A5A);
 
     private MarketPalette() {}
 }

@@ -47,6 +47,7 @@ final class GuiItems {
         for (Component line : marketLines) {
             lore.add(StringTag.valueOf(Component.Serializer.toJson(line)));
         }
+        lore.add(StringTag.valueOf(Component.Serializer.toJson(MarketText.divider())));
         display.put("Lore", lore);
         return result;
     }
