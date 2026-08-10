@@ -9,9 +9,8 @@ record GuiAction(Type type, int number, long amount, UUID orderId, long delivery
     enum Type {
         HOME, BROWSE, HELP, SEARCH_HELP, MY, OPEN_TRADE, PAGE,
         BUY_NOW, SELL_NOW, BUY, SELL, ADJUST_QUANTITY, SET_QUANTITY, SET_MAX_QUANTITY,
-        ADJUST_PRICE_PERCENT, BEST_PRICE,
         REVIEW, CONFIRM_IMMEDIATE, CONFIRM_ORDER, MANAGE_ORDER, PREPARE_CANCEL, CONFIRM_CANCEL, CLAIM, BACK,
-        EXACT_QUANTITY
+        EXACT_QUANTITY, EXACT_PRICE
     }
 
     static GuiAction simple(Type type) {

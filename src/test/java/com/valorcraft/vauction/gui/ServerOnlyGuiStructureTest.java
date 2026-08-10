@@ -26,9 +26,56 @@ class ServerOnlyGuiStructureTest {
         assertTrue(commands.contains("Commands.literal(\"help\")"));
         assertTrue(commands.contains("Commands.literal(\"sell\")"));
         assertTrue(commands.contains("Commands.literal(\"buy\")"));
-        assertTrue(commands.contains("Commands.literal(\"quantity\")"));
-        assertTrue(commands.contains("Commands.literal(\"price\")"));
         assertTrue(commands.contains("ItemArgument.item(context)"));
+    }
+
+    @Test
+    void setCommandIsTheSingleContextualInputAndIsHiddenWithoutDraft() throws Exception {
+        String commands = source("com/valorcraft/vauction/gui/MarketCommands.java");
+        assertTrue(commands.contains("Commands.literal(\"set\")"), "one contextual /ah set input");
+        assertTrue(commands.contains(".requires(MarketCommands::inputDraftActive)"),
+                "set must be invisible without an active input draft");
+        assertTrue(commands.contains("MarketController.instance().setExact(player, value)"));
+        assertFalse(commands.contains("literal(\"quantity\")"),
+                "per-field commands must not leak into the public tree");
+        assertFalse(commands.contains("literal(\"price\")"));
+    }
+
+    @Test
+    void publicHelpIsHumanReadableAndHidesTechnicalVocabulary() throws Exception {
+        String commands = source("com/valorcraft/vauction/gui/MarketCommands.java");
+        String main = between(commands, "private static int help(CommandSourceStack source)",
+                "private static int helpCommands");
+        assertTrue(main.contains("Как купить:"), "help must explain the game, not the command tree");
+        assertTrue(main.contains("Как продать:"));
+        assertTrue(main.contains("ЛКМ"));
+        assertTrue(main.contains("ПКМ"));
+        assertTrue(main.contains("Своя цена:"));
+        assertTrue(main.contains("Моё:"));
+        assertTrue(main.contains("Открыть биржу"));
+        assertTrue(main.contains("/ah search <название>"));
+        assertFalse(main.contains("quantity"), "no developer vocabulary in the public help");
+        assertFalse(main.contains("claim"));
+        assertFalse(main.contains("UUID"));
+        assertFalse(main.contains("/market"), "main help must not advertise aliases");
+        assertFalse(main.contains("maxPrice"));
+        assertFalse(main.contains("NBT"));
+        assertFalse(main.contains("/ah sell"), "only the GUI flow belongs in the public help");
+        assertFalse(main.contains("/ah buy"));
+    }
+
+    @Test
+    void advancedHelpOnlyShowsFallbackCommands() throws Exception {
+        String commands = source("com/valorcraft/vauction/gui/MarketCommands.java");
+        String advanced = between(commands, "private static int helpCommands", "private static int helpSell");
+        assertTrue(advanced.contains("/ah search <название>"));
+        assertTrue(advanced.contains("/ah sell <цена> [количество]"));
+        assertTrue(advanced.contains("/ah buy <предмет> <количество> <цена>"));
+        assertFalse(advanced.contains("/ah set"));
+        assertFalse(advanced.contains("/ah claim"));
+        assertFalse(advanced.contains("/ah cancel"));
+        assertFalse(advanced.contains("UUID"));
+        assertFalse(advanced.contains("deliveryId"));
     }
 
     @Test
@@ -167,8 +214,11 @@ class ServerOnlyGuiStructureTest {
         assertFalse(catalogue.contains("Продать"));
         assertFalse(catalogue.contains("Получить"));
         assertTrue(catalogue.contains("catalogueInfo"));
-        assertTrue(catalogue.contains("\"Моё\""));
+        assertTrue(catalogue.contains("\"Моё\""), "catalogue must link to «Моё»");
         assertTrue(search.contains("\"Новый поиск\""), "search must offer a fresh query");
+        assertTrue(search.contains("\"Все товары\""), "search must offer returning to the whole catalogue");
+        assertTrue(search.contains("GuiAction.simple(GuiAction.Type.BROWSE)"));
+        assertFalse(search.contains("\"Моё\""), "«Моё» is not part of the search task");
         assertTrue(my.contains("\"Каталог\""));
         assertTrue(my.contains("myInfo"));
     }
@@ -184,9 +234,9 @@ class ServerOnlyGuiStructureTest {
         assertTrue(controller.contains("TRADE_BACK = 45"));
         assertTrue(controller.contains("TRADE_SECONDARY = 47"));
         assertTrue(controller.contains("TRADE_PRIMARY = 49"));
-        assertTrue(controller.contains("PRICE_MINUS = 30"));
         assertTrue(controller.contains("PRICE_INFO = 31"));
-        assertTrue(controller.contains("PRICE_PLUS = 32"));
+        assertFalse(controller.contains("PRICE_MINUS"), "percentage steppers are gone");
+        assertFalse(controller.contains("PRICE_PLUS"));
         assertTrue(controller.contains("put(box, s, TRADE_PRIMARY, button(buy ? MarketIcons.PRIMARY_BUY"));
         assertTrue(controller.contains("put(box, s, TRADE_PRIMARY, button(MarketIcons.SUBMIT_LIMIT"));
         assertTrue(controller.contains("put(box, s, TRADE_SECONDARY, button(MarketIcons.MODE_SWITCH"));
@@ -206,16 +256,26 @@ class ServerOnlyGuiStructureTest {
     }
 
     @Test
-    void quantityRowIsOneContiguousGroupWithVisibleCountsAndNoStepButtons() throws Exception {
+    void quantityRowsAreTwoPresetsPlusCustomAndNoRowEverGrowsBeyondThat() throws Exception {
         String controller = source("com/valorcraft/vauction/gui/MarketController.java");
-        assertTrue(controller.contains("quantityPreset(box, s, 20, 1)"));
-        assertTrue(controller.contains("quantityPreset(box, s, 21, 16)"));
-        assertTrue(controller.contains("quantityPreset(box, s, 22, 32)"));
-        assertTrue(controller.contains("quantityPreset(box, s, 23, 64)"));
+        int buyStart = controller.indexOf("if (side == OrderSide.BUY) {");
+        int elseStart = controller.indexOf("} else {", buyStart);
+        String buy = controller.substring(buyStart, elseStart);
+        assertEquals(2, count(buy, "quantityPreset(box, s,"),
+                "BUY must offer exactly [1] [64]");
+        assertTrue(buy.contains("quantityPreset(box, s, 21, 1)"));
+        assertTrue(buy.contains("quantityPreset(box, s, 22, 64)"));
+        String sell = controller.substring(elseStart, controller.indexOf("put(box, s, 23, button(MarketIcons.EXACT"));
+        assertEquals(1, count(sell, "quantityPreset(box, s,"),
+                "SELL must offer exactly [1] [Всё]");
+        assertTrue(controller.contains("MarketText.action(\"Всё\""));
+        assertTrue(controller.contains("put(box, s, 23, button(MarketIcons.EXACT"));
+        assertTrue(controller.contains("MarketText.action(\"Другое\""));
         assertTrue(controller.contains("icon.setCount(Math.min(quantity, 64))"),
                 "presets must show their number on the item sprite");
-        assertTrue(controller.contains("quantityPreset(box, s, 22, 64)"), "sell row keeps 1/16/64");
-        assertTrue(controller.contains("put(box, s, 24, button(MarketIcons.EXACT"));
+        assertFalse(controller.contains("quantityPreset(box, s, 20, 1)"));
+        assertFalse(controller.contains(", 16)"), "mid presets are visual noise");
+        assertFalse(controller.contains(", 32)"));
         assertFalse(controller.contains("Items.RED_DYE"));
         assertFalse(controller.contains("Items.LIME_DYE"));
         assertFalse(controller.contains("ADJUST_QUANTITY\""));
@@ -236,17 +296,40 @@ class ServerOnlyGuiStructureTest {
     }
 
     @Test
-    void exactQuantityAndPriceSurviveMenuCloseViaTimedDraft() throws Exception {
+    void exactQuantityAndPriceSurviveMenuCloseViaOneTimedDraftLifecycle() throws Exception {
         String controller = source("com/valorcraft/vauction/gui/MarketController.java");
         String draft = source("com/valorcraft/vauction/gui/TradeDraft.java");
         assertTrue(controller.contains("EXACT_QUANTITY"));
+        assertTrue(controller.contains("EXACT_PRICE"));
         assertTrue(controller.contains("ClickEvent.Action.SUGGEST_COMMAND"));
+        assertTrue(controller.contains("/ah set <число>"));
+        assertFalse(controller.contains("/ah quantity <число>"));
+        assertFalse(controller.contains("/ah price <число>"));
+        assertTrue(controller.contains("private void beginExactInput"));
+        assertTrue(controller.contains("Укажите своё количество:"));
+        assertTrue(controller.contains("Введите цену за штуку:"));
+        assertTrue(controller.contains("draft.expectedInput == TradeDraft.InputTarget.PRICE"));
         assertTrue(controller.contains("reopenFromDraft(player, draft)"));
         assertTrue(controller.contains("!draft.expired()"));
         assertTrue(controller.contains("drafts.remove(player.getUUID())"));
+        assertTrue(draft.contains("enum InputTarget"));
+        assertTrue(draft.contains("QUANTITY"));
+        assertTrue(draft.contains("PRICE"));
         assertTrue(draft.contains("TTL_MILLIS = 5 * 60 * 1000L"));
         assertTrue(draft.contains("boolean expired()"));
-        assertTrue(controller.contains("session.pendingRequestId = UUID.randomUUID()"));
+        assertTrue(controller.contains("session.pendingRequestId = UUID.randomUUID()"),
+                "every reopen issues a fresh request id");
+    }
+
+    @Test
+    void priceWarningKeepsBothReferencesAndNeverChangesPrice() {
+        MarketSummary normal = new MarketSummary("key", "Copper", 31, 33, 10, 10, 32);
+        assertFalse(MarketController.shouldWarnPrice(OrderSide.BUY, 35, normal));
+        assertTrue(MarketController.shouldWarnPrice(OrderSide.BUY, 320, normal));
+        assertTrue(MarketController.shouldWarnPrice(OrderSide.SELL, 3, normal));
+        MarketSummary thin = new MarketSummary("key", "Copper", 0, 31, 0, 10, 0);
+        assertFalse(MarketController.shouldWarnPrice(OrderSide.BUY, 1000, thin));
+        assertEquals(320L, 320L, "warning is advisory and never rewrites the entered price");
     }
 
     @Test
@@ -258,7 +341,7 @@ class ServerOnlyGuiStructureTest {
         assertFalse(controller.contains("a.type() == GuiAction.Type.PAGE"));
         assertTrue(actions.contains("SET_QUANTITY"));
         assertTrue(actions.contains("SET_MAX_QUANTITY"));
-        assertTrue(controller.contains("quantityPreset(box, s, 23, 64)"));
+        assertTrue(controller.contains("quantityPreset(box, s, 22, 64)"));
         String all = between(controller, "private void setMaximumQuantity", "private void renderMarkets");
         assertTrue(all.contains("service().availableCount"), "ALL must read current server inventory on every click");
     }
@@ -277,9 +360,10 @@ class ServerOnlyGuiStructureTest {
     }
 
     @Test
-    void tradeModesReuseOneLayoutFamilyAndKeepBothLimitOrderBackends() throws Exception {
+    void tradeScreensKeepThreeZoneGrammarAndBothLimitOrderBackends() throws Exception {
         String controller = source("com/valorcraft/vauction/gui/MarketController.java");
         String screens = source("com/valorcraft/vauction/gui/MarketScreen.java");
+        String actions = source("com/valorcraft/vauction/gui/GuiAction.java");
         assertTrue(screens.contains("TRADE_IMMEDIATE"));
         assertTrue(screens.contains("TRADE_LIMIT"));
         assertTrue(screens.contains("PRICE_WARNING"));
@@ -287,11 +371,42 @@ class ServerOnlyGuiStructureTest {
         assertTrue(controller.contains("private void renderEditor"));
         assertTrue(controller.contains("Своя цена"));
         assertTrue(controller.contains("✓ Выставить заявку"));
-        assertTrue(controller.contains("Затем: /ah quantity <число>"));
-        assertTrue(controller.contains("Точно: /ah price <число>"));
         assertTrue(controller.contains("confirmOrder(player, s);"), "normal limit submission has no mandatory confirmation page");
         assertTrue(controller.contains("createBuyOrder(player.getUUID(), s.unit"));
         assertTrue(controller.contains("createSellOrderFromInventory(player, s.unit"));
+        assertFalse(actions.contains("ADJUST_PRICE_PERCENT"), "percentage action is gone");
+        assertFalse(actions.contains("BEST_PRICE"));
+        assertTrue(actions.contains("EXACT_PRICE"));
+        assertTrue(actions.contains("EXACT_QUANTITY"));
+    }
+
+    @Test
+    void limitScreenShowsOnePriceEditButtonAndNoPercentSteppers() throws Exception {
+        String controller = source("com/valorcraft/vauction/gui/MarketController.java");
+        String editor = between(controller, "private void renderEditor", "private void reviewOrSubmit");
+        assertFalse(editor.contains("-10%"));
+        assertFalse(editor.contains("+10%"));
+        assertFalse(editor.contains("ADJUST_PRICE_PERCENT"));
+        assertTrue(editor.contains("Цена за штуку"));
+        assertTrue(editor.contains("Изменить цену"));
+        assertEquals(1, count(editor, "put(box, s, PRICE_INFO"),
+                "price editing must be a single button, not a row of controls");
+    }
+
+    @Test
+    void immediateScreenKeepsSemanticBottomThreeAndTradeInfoOnTheItem() throws Exception {
+        String controller = source("com/valorcraft/vauction/gui/MarketController.java");
+        String immediate = between(controller, "private void renderImmediateQuote", "private void confirmImmediate");
+        assertTrue(immediate.contains("Сейчас от"));
+        assertTrue(immediate.contains("Сейчас покупают"));
+        assertTrue(immediate.contains("Итого"));
+        assertTrue(immediate.contains("Получите"));
+        assertFalse(immediate.contains("Можно купить"), "liquidity lives on the item tooltip, not in controls");
+        assertFalse(immediate.contains("Макс. цена"));
+        assertFalse(immediate.contains("Мин. цена"));
+        assertFalse(immediate.contains("-10%"));
+        assertFalse(immediate.contains("+10%"));
+        assertTrue(immediate.contains("put(box, s, TRADE_PRIMARY, button(buy ? MarketIcons.PRIMARY_BUY"));
     }
 
     @Test
@@ -310,15 +425,8 @@ class ServerOnlyGuiStructureTest {
         assertTrue(controller.contains("case MANAGE_ORDER -> manageOrder"));
     }
 
-    @Test
-    void conservativePriceWarningNeedsTwoReferencesAndNeverChangesPrice() {
-        MarketSummary normal = new MarketSummary("key", "Copper", 31, 33, 10, 10, 32);
-        assertFalse(MarketController.shouldWarnPrice(OrderSide.BUY, 35, normal));
-        assertTrue(MarketController.shouldWarnPrice(OrderSide.BUY, 320, normal));
-        assertTrue(MarketController.shouldWarnPrice(OrderSide.SELL, 3, normal));
-        MarketSummary thin = new MarketSummary("key", "Copper", 0, 31, 0, 10, 0);
-        assertFalse(MarketController.shouldWarnPrice(OrderSide.BUY, 1000, thin));
-        assertEquals(320L, 320L, "warning is advisory and never rewrites the entered price");
+    private static int count(String source, String needle) {
+        return source.split(java.util.regex.Pattern.quote(needle), -1).length - 1;
     }
 
     private static String between(String source, String start, String end) {

@@ -45,21 +45,18 @@ final class MarketCommands {
         return Commands.literal(name)
                 .executes(ctx -> open(ctx.getSource()))
                 .then(Commands.literal("help").executes(ctx -> help(ctx.getSource()))
+                        .then(Commands.literal("commands").executes(ctx -> helpCommands(ctx.getSource())))
                         .then(Commands.literal("sell").executes(ctx -> helpSell(ctx.getSource())))
                         .then(Commands.literal("buy").executes(ctx -> helpBuy(ctx.getSource()))))
                 .then(Commands.literal("search").executes(ctx -> help(ctx.getSource()))
                         .then(Commands.argument("text", StringArgumentType.greedyString())
                                 .suggests(MarketCommands::suggestItems)
                                 .executes(ctx -> search(ctx.getSource(), StringArgumentType.getString(ctx, "text")))))
-                .then(Commands.literal("quantity")
-                        .then(Commands.argument("value", IntegerArgumentType.integer(1))
-                                .suggests(MarketCommands::suggestCommonQuantities)
-                                .executes(ctx -> quantity(ctx.getSource(),
-                                        IntegerArgumentType.getInteger(ctx, "value")))))
-                .then(Commands.literal("price")
+                .then(Commands.literal("set")
+                        .requires(MarketCommands::inputDraftActive)
                         .then(Commands.argument("value", LongArgumentType.longArg(1))
-                                .suggests(MarketCommands::suggestPrices)
-                                .executes(ctx -> editorPrice(ctx.getSource(),
+                                .suggests(MarketCommands::suggestDraftInput)
+                                .executes(ctx -> setExact(ctx.getSource(),
                                         LongArgumentType.getLong(ctx, "value")))))
                 .then(Commands.literal("sell").executes(ctx -> helpSell(ctx.getSource()))
                         .then(Commands.argument("price", LongArgumentType.longArg(1))
@@ -80,12 +77,12 @@ final class MarketCommands {
                                                 .executes(ctx -> buy(ctx, IntegerArgumentType.getInteger(ctx, "quantity"),
                                                         LongArgumentType.getLong(ctx, "maxPrice")))))))
                 .then(Commands.literal("orders").executes(ctx -> orders(ctx.getSource())))
-                .then(Commands.literal("cancel").executes(ctx -> help(ctx.getSource()))
+                .then(Commands.literal("cancel").executes(ctx -> helpCommands(ctx.getSource()))
                         .then(Commands.argument("orderId", StringArgumentType.word())
                                 .suggests(MarketCommands::suggestOrders)
                                 .executes(ctx -> cancel(ctx.getSource(), StringArgumentType.getString(ctx, "orderId")))))
                 .then(Commands.literal("claims").executes(ctx -> claims(ctx.getSource())))
-                .then(Commands.literal("claim").executes(ctx -> help(ctx.getSource()))
+                .then(Commands.literal("claim").executes(ctx -> helpCommands(ctx.getSource()))
                         .then(Commands.argument("deliveryId", LongArgumentType.longArg(1))
                                 .suggests(MarketCommands::suggestClaims)
                                 .executes(ctx -> claim(ctx.getSource(), LongArgumentType.getLong(ctx, "deliveryId")))))
@@ -115,26 +112,46 @@ final class MarketCommands {
         return 1;
     }
 
-    private static int quantity(CommandSourceStack source, int value) {
+    /**
+     * Single contextual input command. Hidden from tab completion by
+     * {@code requires} until the player owns an input draft, then applies
+     * QUANTITY or PRICE depending on which GUI flow started the draft.
+     */
+    private static int setExact(CommandSourceStack source, long value) {
         ServerPlayer player = player(source);
         if (player == null) return 0;
-        if (!MarketController.instance().setQuantity(player, value)) {
-            return fail(source, "Сначала откройте сделку в /ah.");
+        if (!MarketController.instance().setExact(player, value)) {
+            return fail(source, "Сначала нажмите «Другое» или «Изменить цену» в /ah.");
         }
-        source.sendSuccess(() -> Component.literal("Количество: " + value)
-                .withStyle(ChatFormatting.GREEN), false);
         return 1;
     }
 
-    private static int editorPrice(CommandSourceStack source, long value) {
-        ServerPlayer player = player(source);
-        if (player == null) return 0;
-        if (!MarketController.instance().setPrice(player, value)) {
-            return fail(source, "Сначала откройте режим «Своя цена» в /ah.");
+    private static boolean inputDraftActive(CommandSourceStack source) {
+        return source.getEntity() instanceof ServerPlayer player
+                && MarketController.instance().hasInputDraft(player.getUUID());
+    }
+
+    private static CompletableFuture<Suggestions> suggestDraftInput(CommandContext<CommandSourceStack> ctx,
+                                                                    SuggestionsBuilder builder) {
+        ServerPlayer player = ctx.getSource().getPlayer();
+        if (player != null && readySilently()) {
+            TradeDraft draft = MarketController.instance().inputDraft(player.getUUID());
+            if (draft != null && !draft.expired()) {
+                if (draft.expectedInput == TradeDraft.InputTarget.QUANTITY) {
+                    builder.suggest(1);
+                    builder.suggest(16);
+                    builder.suggest(64);
+                    int available = VAuctionCore.instance().auctionService()
+                            .availableCount(player.getUUID(), draft.unit);
+                    if (available > 0) builder.suggest(available, Component.literal("все доступные"));
+                } else {
+                    builder.suggest(1);
+                    builder.suggest(100);
+                    builder.suggest(1000);
+                }
+            }
         }
-        source.sendSuccess(() -> Component.literal("Цена за штуку: " + value)
-                .withStyle(ChatFormatting.GREEN), false);
-        return 1;
+        return builder.buildFuture();
     }
 
     private static int claims(CommandSourceStack source) {
@@ -207,31 +224,55 @@ final class MarketCommands {
     private static int help(CommandSourceStack source) {
         source.sendSuccess(() -> Component.literal("Биржа ValorCraft")
                 .withStyle(ChatFormatting.GOLD), false);
-        source.sendSuccess(() -> Component.literal("Игроки сами назначают цены. Если цена покупателя подходит продавцу, сделка происходит автоматически.")
+        source.sendSuccess(() -> Component.literal("На бирже игроки сами покупают и продают ресурсы.")
                 .withStyle(ChatFormatting.GRAY), false);
-        helpLine(source, "/ah", "открыть понятное меню покупки и продажи");
-        helpLine(source, "/ah sell 32 64", "продать 64 предмета из основной руки по 32 за штуку");
-        helpLine(source, "/ah buy minecraft:copper_ingot 64 32", "купить 64 предмета максимум по 32 за штуку");
-        helpLine(source, "/ah search <текст>", "найти товар");
-        helpLine(source, "/ah quantity 500", "точное количество в открытой сделке");
-        helpLine(source, "/ah price 28", "точная цена в режиме «Своя цена»");
-        helpLine(source, "/ah info", "цены и количество предмета в руке");
-        helpLine(source, "/ah orders", "мои ожидающие и частично исполненные заявки");
-        helpLine(source, "/ah claims", "получить покупки и возвраты");
-        source.sendSuccess(() -> Component.literal("Нажимайте Tab после каждой части команды. /market и /auction работают так же.")
+        source.sendSuccess(() -> Component.literal("").withStyle(ChatFormatting.GRAY), false);
+        source.sendSuccess(() -> Component.literal("Как купить:").withStyle(ChatFormatting.YELLOW), false);
+        source.sendSuccess(() -> Component.literal("Откройте /ah и нажмите ЛКМ по нужному товару. Выберите количество и нажмите «Купить сейчас».")
+                .withStyle(ChatFormatting.GRAY), false);
+        source.sendSuccess(() -> Component.literal("").withStyle(ChatFormatting.GRAY), false);
+        source.sendSuccess(() -> Component.literal("Как продать:").withStyle(ChatFormatting.YELLOW), false);
+        source.sendSuccess(() -> Component.literal("Нажмите ПКМ по товару. Выберите количество и нажмите «Продать сейчас».")
+                .withStyle(ChatFormatting.GRAY), false);
+        source.sendSuccess(() -> Component.literal("").withStyle(ChatFormatting.GRAY), false);
+        source.sendSuccess(() -> Component.literal("Своя цена:").withStyle(ChatFormatting.YELLOW), false);
+        source.sendSuccess(() -> Component.literal("Не нравится текущая цена — нажмите «Своя цена». Заявка будет ждать подходящего предложения и исполнится сама.")
+                .withStyle(ChatFormatting.GRAY), false);
+        source.sendSuccess(() -> Component.literal("").withStyle(ChatFormatting.GRAY), false);
+        source.sendSuccess(() -> Component.literal("Моё:").withStyle(ChatFormatting.YELLOW), false);
+        source.sendSuccess(() -> Component.literal("Здесь находятся ваши активные заявки, купленные предметы и возвраты.")
+                .withStyle(ChatFormatting.GRAY), false);
+        source.sendSuccess(() -> Component.literal("").withStyle(ChatFormatting.GRAY), false);
+        helpLine(source, "/ah search <название>", "найти товар");
+        source.sendSuccess(() -> Component.literal("[Открыть биржу]").withStyle(style -> style
+                .withColor(ChatFormatting.GREEN)
+                .withClickEvent(new ClickEvent(ClickEvent.Action.RUN_COMMAND, "/ah"))), false);
+        source.sendSuccess(() -> Component.literal("[Дополнительные команды]").withStyle(style -> style
+                .withColor(ChatFormatting.DARK_GRAY)
+                .withClickEvent(new ClickEvent(ClickEvent.Action.RUN_COMMAND, "/ah help commands"))), false);
+        return 1;
+    }
+
+    private static int helpCommands(CommandSourceStack source) {
+        source.sendSuccess(() -> Component.literal("Дополнительные команды:")
+                .withStyle(ChatFormatting.GOLD), false);
+        helpLine(source, "/ah search <название>", "найти товар");
+        helpLine(source, "/ah sell <цена> [количество]", "создать заявку на продажу предмета из руки");
+        helpLine(source, "/ah buy <предмет> <количество> <цена>", "создать заявку на покупку");
+        source.sendSuccess(() -> Component.literal("Остальное делается в меню: /ah и «Моё».")
                 .withStyle(ChatFormatting.GRAY), false);
         return 1;
     }
 
     private static int helpSell(CommandSourceStack source) {
-        helpLine(source, "/market sell <цена> [количество]",
-                "точный предмет из основной руки; без количества продаются все совпадающие предметы из инвентаря");
+        helpLine(source, "/ah sell <цена> [количество]",
+                "заявка на продажу точного предмета из основной руки; без количества — все совпадающие предметы");
         return 1;
     }
 
     private static int helpBuy(CommandSourceStack source) {
-        helpLine(source, "/market buy <предмет> <количество> <макс. цена>",
-                "обычный предмет без особых данных; точный вариант с NBT выбирайте в GUI");
+        helpLine(source, "/ah buy <предмет> <количество> <цена>",
+                "заявка на покупку обычного предмета; точный вариант с особыми свойствами выбирайте в GUI");
         return 1;
     }
 

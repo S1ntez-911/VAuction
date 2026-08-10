@@ -9,7 +9,6 @@ final class MarketSounds {
 
     static void navigation(ServerPlayer player) { play(player, SoundEvents.UI_BUTTON_CLICK.value(), 0.35f, 1.0f); }
     static void page(ServerPlayer player) { play(player, SoundEvents.BOOK_PAGE_TURN, 0.45f, 1.0f); }
-    static void adjust(ServerPlayer player, boolean increase) { play(player, SoundEvents.UI_BUTTON_CLICK.value(), 0.25f, increase ? 1.2f : 0.8f); }
     static void preset(ServerPlayer player, boolean all) { play(player, SoundEvents.UI_BUTTON_CLICK.value(), 0.28f, all ? 0.95f : 1.1f); }
     static void mode(ServerPlayer player) { play(player, SoundEvents.UI_BUTTON_CLICK.value(), 0.3f, 0.85f); }
     static void success(ServerPlayer player) { play(player, SoundEvents.EXPERIENCE_ORB_PICKUP, 0.45f, 1.15f); }

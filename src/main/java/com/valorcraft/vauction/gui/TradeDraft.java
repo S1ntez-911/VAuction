@@ -5,12 +5,17 @@ import net.minecraft.world.item.ItemStack;
 
 /**
  * Lightweight copy of an open trade state that survives the chest GUI closing.
- * "Точно" (exact quantity/price) stores a draft and asks the player to type
- * {@code /ah quantity <n>} / {@code /ah price <n>}; the command then re-opens
- * the same trade screen with the same item, side, mode, origin and TTL draft.
- * Drafts are short-lived so stale state never lingers.
+ * «Другое» (custom quantity) and «Изменить цену» (custom price) store a draft
+ * and ask the player to type {@code /ah set <число>}; the single contextual
+ * command reads {@link #expectedInput} and applies either the QUANTITY or the
+ * PRICE field, then re-opens the same trade screen with the same item, side,
+ * mode, origin and TTL draft. Drafts are short-lived so stale state never lingers.
  */
 final class TradeDraft {
+    enum InputTarget {
+        QUANTITY, PRICE
+    }
+
     static final long TTL_MILLIS = 5 * 60 * 1000L;
 
     final ItemStack unit;
@@ -21,10 +26,12 @@ final class TradeDraft {
     final int page;
     int quantity;
     long price;
+    final InputTarget expectedInput;
     private final long createdAt = System.currentTimeMillis();
 
     private TradeDraft(ItemStack unit, OrderSide side, boolean immediate, int quantity,
-                       long price, boolean searchActive, String search, int page) {
+                       long price, boolean searchActive, String search, int page,
+                       InputTarget expectedInput) {
         this.unit = unit.copy();
         this.side = side;
         this.immediate = immediate;
@@ -33,12 +40,13 @@ final class TradeDraft {
         this.searchActive = searchActive;
         this.search = search;
         this.page = page;
+        this.expectedInput = expectedInput;
     }
 
-    static TradeDraft of(MarketSession session) {
+    static TradeDraft of(MarketSession session, InputTarget expectedInput) {
         return new TradeDraft(session.unit, session.orderSide, session.immediate,
                 session.quantity, session.price, session.searchActive, session.search,
-                session.cataloguePage);
+                session.cataloguePage, expectedInput);
     }
 
     boolean expired() {

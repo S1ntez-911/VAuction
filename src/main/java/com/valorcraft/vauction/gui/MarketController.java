@@ -39,9 +39,7 @@ public final class MarketController {
     static final int TRADE_BACK = 45;
     static final int TRADE_SECONDARY = 47;
     static final int TRADE_PRIMARY = 49;
-    static final int PRICE_MINUS = 30;
     static final int PRICE_INFO = 31;
-    static final int PRICE_PLUS = 32;
     private static final int[] CARD_SLOTS = java.util.stream.IntStream.range(0, 45).toArray();
     private static final MarketController INSTANCE = new MarketController();
 
@@ -93,47 +91,36 @@ public final class MarketController {
         renderMy(player, session);
     }
 
-    public boolean setQuantity(ServerPlayer player, int quantity) {
-        if (quantity <= 0) return false;
-        MarketSession session = sessions.get(player.getUUID());
-        if (session != null && (session.screen == MarketScreen.TRADE_IMMEDIATE
-                || session.screen == MarketScreen.TRADE_LIMIT
-                || session.screen == MarketScreen.PRICE_WARNING)) {
-            session.quantity = quantity;
-            if (session.immediate) renderImmediateQuote(player, session);
-            else {
-                session.screen = MarketScreen.TRADE_LIMIT;
-                renderEditor(player, session);
-            }
-            return true;
-        }
+    /**
+     * Contextual «/ah set <число>» input. Applies the value to the active input
+     * draft (QUANTITY or PRICE) and re-opens the same trade screen. The command
+     * literal itself is hidden by {@code .requires} while no draft exists, so an
+     * average player never meets it outside the GUI-guided input flow.
+     */
+    public boolean setExact(ServerPlayer player, long value) {
+        if (value <= 0) return false;
         TradeDraft draft = drafts.get(player.getUUID());
         if (draft != null && !draft.expired()) {
-            draft.quantity = quantity;
+            if (draft.expectedInput == TradeDraft.InputTarget.PRICE) {
+                draft.price = value;
+                draft.immediate = false;
+            } else {
+                draft.quantity = (int) Math.min(value, Integer.MAX_VALUE);
+            }
             reopenFromDraft(player, draft);
             return true;
         }
         return false;
     }
 
-    public boolean setPrice(ServerPlayer player, long price) {
-        if (price <= 0) return false;
-        MarketSession session = sessions.get(player.getUUID());
-        if (session != null && (session.screen == MarketScreen.TRADE_LIMIT
-                || session.screen == MarketScreen.PRICE_WARNING)) {
-            session.price = price;
-            session.screen = MarketScreen.TRADE_LIMIT;
-            renderEditor(player, session);
-            return true;
-        }
-        TradeDraft draft = drafts.get(player.getUUID());
-        if (draft != null && !draft.expired()) {
-            draft.price = price;
-            draft.immediate = false;
-            reopenFromDraft(player, draft);
-            return true;
-        }
-        return false;
+    public boolean hasInputDraft(UUID playerId) {
+        TradeDraft draft = drafts.get(playerId);
+        return draft != null && !draft.expired();
+    }
+
+    TradeDraft inputDraft(UUID playerId) {
+        TradeDraft draft = drafts.get(playerId);
+        return draft == null || draft.expired() ? null : draft;
     }
 
     public void clicked(Player rawPlayer, MarketSession session, int slotId,
@@ -203,14 +190,13 @@ public final class MarketController {
             case SELL_NOW -> { MarketSounds.mode(player); beginImmediate(player, s, OrderSide.SELL); }
             case SET_QUANTITY -> setQuantityPreset(player, s, a.number());
             case SET_MAX_QUANTITY -> setMaximumQuantity(player, s);
-            case ADJUST_PRICE_PERCENT -> { s.price = adjustedPrice(s.price, a.number()); MarketSounds.adjust(player, a.number() > 0); renderEditor(player, s); }
-            case BEST_PRICE -> { applyBestPrice(s); renderEditor(player, s); }
             case REVIEW -> reviewOrSubmit(player, s);
             case CONFIRM_IMMEDIATE -> confirmImmediate(player, s);
             case CONFIRM_ORDER -> confirmOrder(player, s);
             case MANAGE_ORDER -> manageOrder(player, s, a);
             case PREPARE_CANCEL -> { s.screen = MarketScreen.CONFIRM_CANCEL; renderCancel(player, s); }
-            case EXACT_QUANTITY -> beginExactQuantity(player, s);
+            case EXACT_QUANTITY -> beginExactInput(player, s, TradeDraft.InputTarget.QUANTITY);
+            case EXACT_PRICE -> beginExactInput(player, s, TradeDraft.InputTarget.PRICE);
             case CONFIRM_CANCEL -> confirmCancel(player, s);
             case CLAIM -> claim(player, s, a.deliveryId());
             case BACK -> back(player, s);
@@ -245,19 +231,26 @@ public final class MarketController {
         if (s.immediate) renderImmediateQuote(player, s); else renderEditor(player, s);
     }
 
-    /** «Точно»: saves a timed draft and guides the player to /ah quantity without losing the trade. */
-    private void beginExactQuantity(ServerPlayer player, MarketSession s) {
-        drafts.put(player.getUUID(), TradeDraft.of(s));
+    /**
+     * «Другое» / «Изменить цену»: saves a timed draft and guides the player to
+     * the single contextual command {@code /ah set <число>} without losing the
+     * open trade. The command reads the draft target and applies the right field.
+     */
+    private void beginExactInput(ServerPlayer player, MarketSession s, TradeDraft.InputTarget target) {
+        drafts.put(player.getUUID(), TradeDraft.of(s, target));
         player.sendSystemMessage(MarketText.brand());
-        player.sendSystemMessage(MarketText.text("Укажите точное количество:"));
-        player.sendSystemMessage(Component.literal("/ah quantity <число>")
+        player.sendSystemMessage(MarketText.text(target == TradeDraft.InputTarget.PRICE
+                ? "Введите цену за штуку:" : "Укажите своё количество:"));
+        player.sendSystemMessage(Component.literal("/ah set <число>")
                 .withStyle(style -> style.withColor(MarketPalette.INFO)
-                        .withClickEvent(new ClickEvent(ClickEvent.Action.SUGGEST_COMMAND, "/ah quantity "))));
-        player.sendSystemMessage(MarketText.muted("Число запомнится на 5 минут — сделка откроется снова."));
+                        .withClickEvent(new ClickEvent(ClickEvent.Action.SUGGEST_COMMAND, "/ah set "))));
+        player.sendSystemMessage(MarketText.muted(target == TradeDraft.InputTarget.PRICE
+                ? "Заявка снова откроется с этой ценой."
+                : "Сделка снова откроется с этим количеством."));
         MarketSounds.preset(player, false);
     }
 
-    /** Re-opens the trade from a draft after /ah quantity|price ran while the GUI was closed. */
+    /** Re-opens the trade from a draft after /ah set ran while the GUI was closed. */
     private void reopenFromDraft(ServerPlayer player, TradeDraft draft) {
         String key = read().marketKey(draft.unit);
         if (key == null) {
@@ -380,7 +373,7 @@ public final class MarketController {
         MarketSummary summary = market == null ? null : market.card().summary();
         lore.add(MarketText.action(buy ? "ПОКУПКА" : "ПРОДАЖА",
                 buy ? MarketPalette.SUCCESS : MarketPalette.SELL));
-        lore.add(MarketText.labelValue(buy ? "Сейчас от" : "Сейчас покупают от",
+        lore.add(MarketText.labelValue(buy ? "Сейчас от" : "Сейчас покупают",
                 moneyOrUnavailable(summary == null ? 0 : (buy
                         ? summary.bestAsk() : summary.bestBid())), MarketPalette.TEXT));
         if (!buy) {
@@ -388,24 +381,23 @@ public final class MarketController {
         }
         lore.add(Component.empty());
         lore.add(MarketText.labelValue("Количество", Integer.toString(quote.requestedQuantity()), MarketPalette.TEXT));
-        lore.add(MarketText.labelValue(buy ? "Можно купить" : "Можно продать",
-                quote.fillableQuantity() + " / " + quote.requestedQuantity(),
-                quote.executable() ? MarketPalette.SUCCESS : MarketPalette.WARNING));
+        if (quote.fillableQuantity() < quote.requestedQuantity()) {
+            lore.add(MarketText.labelValue("Доступно", quote.fillableQuantity() + " из "
+                    + quote.requestedQuantity(), MarketPalette.WARNING));
+        }
         if (quote.executable()) {
-            lore.add(Component.empty());
             lore.add(MarketText.labelValue(buy ? "Итого" : "Получите",
                     CurrencyText.format(quote.expectedTotal()), MarketPalette.TEXT));
-            lore.add(MarketText.labelValue(buy ? "Макс. цена" : "Мин. цена",
-                    CurrencyText.format(quote.worstExecutionPrice()),
-                    buy ? MarketPalette.SUCCESS : MarketPalette.SELL));
+            if (quote.insufficientLiquidity()) {
+                lore.add(MarketText.muted("Остаток не станет ожидающей заявкой."));
+            }
         } else {
             lore.add(MarketText.colored("Сейчас нет подходящих предложений.", MarketPalette.WARNING));
         }
-        if (quote.insufficientLiquidity()) lore.add(MarketText.muted("Остаток не станет ожидающей заявкой."));
         box.setItem(13, GuiItems.decorateMarketItem(s.unit, lore));
         quantityControls(box, s, s.orderSide);
         put(box, s, TRADE_BACK, button(MarketIcons.BACK, "Назад", "К каталогу"), GuiAction.simple(GuiAction.Type.BACK));
-        put(box, s, TRADE_SECONDARY, button(MarketIcons.MODE_SWITCH, "Своя цена", "Создать ожидающую заявку"),
+        put(box, s, TRADE_SECONDARY, button(MarketIcons.MODE_SWITCH, "Своя цена", "Заявка будет ждать подходящего предложения"),
                 GuiAction.simple(buy ? GuiAction.Type.BUY : GuiAction.Type.SELL));
         if (quote.executable()) {
             put(box, s, TRADE_PRIMARY, button(buy ? MarketIcons.PRIMARY_BUY : MarketIcons.PRIMARY_SELL,
@@ -505,22 +497,15 @@ public final class MarketController {
                 MarketText.action(s.orderSide == OrderSide.BUY ? "ЗАЯВКА НА ПОКУПКУ" : "ЗАЯВКА НА ПРОДАЖУ",
                         s.orderSide == OrderSide.BUY ? MarketPalette.SUCCESS : MarketPalette.SELL),
                 MarketText.labelValue("Количество", Integer.toString(s.quantity), MarketPalette.TEXT),
-                MarketText.labelValue("Цена за единицу", CurrencyText.format(s.price), MarketPalette.TEXT),
+                MarketText.labelValue("Цена за штуку", CurrencyText.format(s.price), MarketPalette.TEXT),
                 MarketText.labelValue(s.orderSide == OrderSide.BUY ? "Резерв" : "Сумма заявки",
                         CurrencyText.format(total), MarketPalette.TEXT),
                 s.orderSide == OrderSide.SELL
                         ? MarketText.labelValue("Доступно", Integer.toString(service().availableCount(player.getUUID(), s.unit)), MarketPalette.TEXT)
                         : MarketText.muted("Средства резервируются после подтверждения"))));
         quantityControls(box, s, s.orderSide);
-        put(box, s, PRICE_MINUS, button(Items.PAPER, "Цена -10%", "Уменьшить цену"),
-                GuiAction.number(GuiAction.Type.ADJUST_PRICE_PERCENT, -10));
-        put(box, s, PRICE_INFO, button(MarketIcons.PRICE_INFO,
-                MarketText.labelValue("Цена", CurrencyText.format(s.price), MarketPalette.TEXT),
-                List.of(MarketText.muted("ЛКМ → подставить рыночную"),
-                        MarketText.muted("Точно: /ah price <число>"))),
-                GuiAction.simple(GuiAction.Type.BEST_PRICE));
-        put(box, s, PRICE_PLUS, button(Items.PAPER, "Цена +10%", "Увеличить цену"),
-                GuiAction.number(GuiAction.Type.ADJUST_PRICE_PERCENT, 10));
+        put(box, s, PRICE_INFO, button(MarketIcons.PRICE_INFO, "Изменить цену", "Указать свою цену за штуку"),
+                GuiAction.simple(GuiAction.Type.EXACT_PRICE));
         put(box, s, TRADE_BACK, button(MarketIcons.BACK, "Назад", "К каталогу"), GuiAction.simple(GuiAction.Type.BACK));
         put(box, s, TRADE_SECONDARY, button(MarketIcons.MODE_SWITCH,
                 buy ? "Купить сейчас" : "Продать сейчас", "Вернуться к рыночной цене"),
@@ -730,15 +715,6 @@ public final class MarketController {
         }
     }
 
-    private void applyBestPrice(MarketSession s) {
-        AuctionReadService.MarketView view = read().market(s.unit);
-        if (view == null) return;
-        MarketSummary m = view.card().summary();
-        long best = s.orderSide == OrderSide.BUY ? m.bestAsk() : m.bestBid();
-        if (best <= 0) best = m.lastTradePrice();
-        if (best > 0) s.price = best;
-    }
-
     private void openBox(ServerPlayer player, MarketSession s, SimpleContainer box, String title) {
         if (s.menu != null && s.contents != null && player.containerMenu == s.menu) {
             for (int slot = 0; slot < 54; slot++) s.contents.setItem(slot, box.getItem(slot));
@@ -777,7 +753,7 @@ public final class MarketController {
 
     private static void catalogueNavigation(SimpleContainer box, MarketSession s, Page<?> page) {
         pageEdges(box, s, page);
-        put(box, s, NAV_SEARCH, button(MarketIcons.SEARCH, "Поиск", "/ah search <название>"),
+        put(box, s, NAV_SEARCH, button(MarketIcons.SEARCH, "Поиск", "Искать по названию"),
                 GuiAction.simple(GuiAction.Type.SEARCH_HELP));
         catalogueInfo(box, s, page);
         put(box, s, NAV_MY, button(MarketIcons.MY, "Моё", "Заявки, покупки и возвраты"),
@@ -786,11 +762,11 @@ public final class MarketController {
 
     private static void searchNavigation(SimpleContainer box, MarketSession s, Page<?> page) {
         pageEdges(box, s, page);
-        put(box, s, NAV_SEARCH, button(MarketIcons.SEARCH, "Новый поиск", "/ah search <название>"),
+        put(box, s, NAV_SEARCH, button(MarketIcons.SEARCH, "Новый поиск", "Уточнить запрос"),
                 GuiAction.simple(GuiAction.Type.SEARCH_HELP));
         catalogueInfo(box, s, page);
-        put(box, s, NAV_MY, button(MarketIcons.MY, "Моё", "Заявки, покупки и возвраты"),
-                GuiAction.simple(GuiAction.Type.MY));
+        put(box, s, NAV_MY, button(MarketIcons.CATALOGUE, "Все товары", "Вернуться к каталогу"),
+                GuiAction.simple(GuiAction.Type.BROWSE));
     }
 
     private static void myNavigation(SimpleContainer box, MarketSession s, Page<?> page) {
@@ -857,19 +833,15 @@ public final class MarketController {
 
     private static void quantityControls(SimpleContainer box, MarketSession s, OrderSide side) {
         if (side == OrderSide.BUY) {
-            quantityPreset(box, s, 20, 1);
-            quantityPreset(box, s, 21, 16);
-            quantityPreset(box, s, 22, 32);
-            quantityPreset(box, s, 23, 64);
-        } else {
-            quantityPreset(box, s, 20, 1);
-            quantityPreset(box, s, 21, 16);
+            quantityPreset(box, s, 21, 1);
             quantityPreset(box, s, 22, 64);
-            put(box, s, 23, button(MarketIcons.ALL, MarketText.action("Всё", MarketPalette.SELL),
+        } else {
+            quantityPreset(box, s, 21, 1);
+            put(box, s, 22, button(MarketIcons.ALL, MarketText.action("Всё", MarketPalette.SELL),
                     List.of(MarketText.muted("Всё доступное сейчас"))), GuiAction.simple(GuiAction.Type.SET_MAX_QUANTITY));
         }
-        put(box, s, 24, button(MarketIcons.EXACT, MarketText.action("Точно", MarketPalette.TEXT),
-                List.of(MarketText.muted("Затем: /ah quantity <число>"))),
+        put(box, s, 23, button(MarketIcons.EXACT, MarketText.action("Другое", MarketPalette.TEXT),
+                List.of(MarketText.muted("Указать своё количество"))),
                 GuiAction.simple(GuiAction.Type.EXACT_QUANTITY));
     }
 
@@ -879,20 +851,6 @@ public final class MarketController {
                 List.of(MarketText.muted("Установить количество")));
         icon.setCount(Math.min(quantity, 64));
         put(box, s, slot, icon, GuiAction.quantityPreset(quantity));
-    }
-
-    private static long adjustedPrice(long current, int percent) {
-        if (percent < 0) {
-            long reduction = Math.max(1, current / Math.max(1, 100 / -percent));
-            return Math.max(1, current - reduction);
-        }
-        long increase;
-        try {
-            increase = Math.max(1, Math.multiplyExact(current, percent) / 100);
-            return Math.addExact(current, increase);
-        } catch (ArithmeticException e) {
-            return Long.MAX_VALUE;
-        }
     }
 
     static boolean shouldWarnPrice(OrderSide side, long entered, MarketSummary market) {
