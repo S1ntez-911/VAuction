@@ -506,7 +506,7 @@ public final class MarketController {
                         CurrencyText.format(total), MarketPalette.TEXT),
                 s.orderSide == OrderSide.SELL
                         ? MarketText.labelValue("Доступно", Integer.toString(service().availableCount(player.getUUID(), s.unit)), MarketPalette.TEXT)
-                        : MarketText.muted("Спишется позже"))));
+                        : MarketText.muted("Деньги резервируются"))));
         quantityControls(box, s, s.orderSide);
         put(box, s, PRICE_INFO, button(MarketIcons.PRICE_INFO, "Изменить цену", "Своя цена"),
                 GuiAction.simple(GuiAction.Type.EXACT_PRICE));
@@ -585,9 +585,20 @@ public final class MarketController {
                     s.quantity, s.pendingRequestId);
         }
         showOutcome(player, outcome);
-        if (outcome.isSuccess()) {
+        if (outcome.status() == AuctionService.Result.ACCEPTED_PENDING) {
             MarketSounds.placed(player);
-            MarketText.bar(player, "Заявка создана", MarketPalette.SUCCESS);
+            MarketText.bar(player, "Заявка обрабатывается", MarketPalette.TEXT);
+        } else if (outcome.isSuccess()) {
+            MarketSounds.placed(player);
+            if (outcome.order().remainingQuantity() == 0) {
+                MarketText.bar(player, "Заявка исполнена", MarketPalette.SUCCESS);
+            } else if (outcome.filledQuantity() > 0) {
+                MarketText.bar(player, (s.orderSide == OrderSide.BUY ? "Куплено" : "Продано")
+                        + ": " + outcome.filledQuantity() + " · осталось "
+                        + outcome.order().remainingQuantity(), MarketPalette.SUCCESS);
+            } else {
+                MarketText.bar(player, "Заявка создана", MarketPalette.SUCCESS);
+            }
         } else {
             MarketSounds.error(player);
         }
@@ -668,8 +679,7 @@ public final class MarketController {
         s.resetActions();
         box.setItem(22, GuiItems.namedButton(new ItemStack(Items.BARRIER),
                 MarketText.action("Отменить заявку?", MarketPalette.ERROR),
-                List.of(MarketText.text("Остаток вернётся в «Моё»."),
-                        MarketText.muted("Предметы появятся в «Моём»."))));
+                List.of(MarketText.text("Остаток вернётся в «Моё»."))));
         put(box, s, TRADE_BACK, button(MarketIcons.BACK, "Назад", "Не отменять"), GuiAction.simple(GuiAction.Type.BACK));
         put(box, s, TRADE_PRIMARY, button(MarketIcons.CANCEL,
                 MarketText.action("✕ Отменить заявку", MarketPalette.ERROR),

@@ -484,6 +484,13 @@ class ServerOnlyGuiStructureTest {
         assertTrue(controller.contains("bar(player, \"Куплено: \" + filled + \" шт. за \""));
         assertTrue(controller.contains("bar(player, \"Продано: \" + filled + \" шт. за \""));
         assertTrue(controller.contains("bar(player, \"Заявка создана\", MarketPalette.SUCCESS)"));
+        assertTrue(controller.contains("bar(player, \"Заявка исполнена\", MarketPalette.SUCCESS)"));
+        assertTrue(controller.contains("bar(player, \"Заявка обрабатывается\", MarketPalette.TEXT)"));
+        assertTrue(controller.contains("· осталось "), "partial fill bar must report the remaining quantity");
+        assertFalse(controller.contains("Моём».\")))"), "cancel-confirm must keep exactly one short line");
+        assertTrue(controller.contains("Остаток вернётся в «Моё»."));
+        assertTrue(controller.contains("Деньги резервируются"));
+        assertFalse(controller.contains("Спишется позже"));
         assertTrue(controller.contains("bar(player, \"Получено из биржи\", MarketPalette.SUCCESS)"));
         assertTrue(controller.contains("bar(player, \"Заявка отменена\", MarketPalette.SUCCESS)"));
         assertTrue(controller.contains("bar(player, \"Нет предложений\", MarketPalette.WARNING)"));
