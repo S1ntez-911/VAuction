@@ -34,14 +34,11 @@ public final class MarketReadRepository {
             + "AND vo.processing_state='NONE' THEN 0 ELSE 1 END, vo.updated_at DESC, vo.order_id LIMIT 1) "
             + "LEFT JOIN auction_orders o ON o.market_key=p.market_key GROUP BY p.market_key";
 
-    public List<MarketCard> page(Connection c, String rawQuery, long recentCutoff,
+    public List<MarketCard> page(Connection c, List<List<String>> groups, long recentCutoff,
                                  int offset, int limit) {
-        String query = rawQuery == null ? "" : rawQuery.trim().toLowerCase(Locale.ROOT);
-        boolean searching = !query.isEmpty();
+        boolean searching = !groups.isEmpty();
         String candidates = searching
-                ? "WITH paged AS (SELECT market_key, MAX(updated_at) activity FROM auction_orders "
-                + "WHERE status='ACTIVE' AND processing_state='NONE' AND item_search_name LIKE ? ESCAPE '\\' "
-                + "GROUP BY market_key ORDER BY activity DESC, market_key LIMIT ? OFFSET ?) "
+                ? createCandidateCte(whereClause(groups))
                 : "WITH active AS (SELECT market_key, MAX(updated_at) activity FROM auction_orders "
                 + "WHERE status='ACTIVE' AND processing_state='NONE' GROUP BY market_key), "
                 + "recent AS (SELECT market_key, MAX(settled_at) activity FROM auction_trades "
@@ -53,7 +50,11 @@ public final class MarketReadRepository {
         try (PreparedStatement ps = c.prepareStatement(candidates + CARD_SELECT)) {
             int i = 1;
             if (searching) {
-                ps.setString(i++, "%" + escapeLike(query) + "%");
+                for (List<String> group : groups) {
+                    for (String alias : group) {
+                        ps.setString(i++, "%" + escapeLike(alias) + "%");
+                    }
+                }
             } else {
                 ps.setLong(i++, recentCutoff);
             }
@@ -70,13 +71,12 @@ public final class MarketReadRepository {
     }
 
     /** Exact, bounded count using the same visibility rules as {@link #page}. */
-    public long count(Connection c, String rawQuery, long recentCutoff) {
-        String query = rawQuery == null ? "" : rawQuery.trim().toLowerCase(Locale.ROOT);
-        boolean searching = !query.isEmpty();
+    public long count(Connection c, List<List<String>> groups, long recentCutoff) {
+        boolean searching = !groups.isEmpty();
         String sql = searching
                 ? "SELECT COUNT(*) FROM (SELECT market_key FROM auction_orders "
-                + "WHERE status='ACTIVE' AND processing_state='NONE' AND item_search_name LIKE ? ESCAPE '\\' "
-                + "GROUP BY market_key)"
+                + "WHERE status='ACTIVE' AND processing_state='NONE' AND " + whereClause(groups)
+                + " GROUP BY market_key)"
                 : "WITH active AS (SELECT market_key, MAX(updated_at) activity FROM auction_orders "
                 + "WHERE status='ACTIVE' AND processing_state='NONE' GROUP BY market_key), "
                 + "recent AS (SELECT market_key, MAX(settled_at) activity FROM auction_trades "
@@ -84,14 +84,43 @@ public final class MarketReadRepository {
                 + "candidate AS (SELECT market_key FROM (SELECT * FROM active UNION ALL SELECT * FROM recent) "
                 + "GROUP BY market_key) SELECT COUNT(*) FROM candidate";
         try (PreparedStatement ps = c.prepareStatement(sql)) {
-            if (searching) ps.setString(1, "%" + escapeLike(query) + "%");
-            else ps.setLong(1, recentCutoff);
+            if (searching) {
+                int i = 1;
+                for (List<String> group : groups) {
+                    for (String alias : group) {
+                        ps.setString(i++, "%" + escapeLike(alias) + "%");
+                    }
+                }
+            } else {
+                ps.setLong(1, recentCutoff);
+            }
             try (ResultSet rs = ps.executeQuery()) {
                 return rs.next() ? rs.getLong(1) : 0;
             }
         } catch (SQLException e) {
             throw new DatabaseException("market GUI count failed", e);
         }
+    }
+
+    /** AND between word groups, OR inside a group: {@code (x LIKE ? OR x LIKE ?) AND (y LIKE ?)}. */
+    private static String whereClause(List<List<String>> groups) {
+        StringBuilder sql = new StringBuilder();
+        for (List<String> group : groups) {
+            if (sql.length() > 0) sql.append(" AND ");
+            sql.append("(");
+            for (int i = 0; i < group.size(); i++) {
+                if (i > 0) sql.append(" OR ");
+                sql.append("item_search_name LIKE ? ESCAPE '\\'");
+            }
+            sql.append(")");
+        }
+        return sql.toString();
+    }
+
+    private static String createCandidateCte(String where) {
+        return "WITH paged AS (SELECT market_key, MAX(updated_at) activity FROM auction_orders "
+                + "WHERE status='ACTIVE' AND processing_state='NONE' AND " + where
+                + " GROUP BY market_key ORDER BY activity DESC, market_key LIMIT ? OFFSET ?) ";
     }
 
     public Optional<MarketCard> byKey(Connection c, String marketKey) {

@@ -425,6 +425,41 @@ class ServerOnlyGuiStructureTest {
         assertTrue(controller.contains("case MANAGE_ORDER -> manageOrder"));
     }
 
+    @Test
+    void catalogueCardsUseActionLabelsAndHumanStatuses() throws Exception {
+        String controller = source("com/valorcraft/vauction/gui/MarketController.java");
+        assertTrue(controller.contains("labelValue(\"Можно купить\""),
+                "card price labels must not collide with the action button name");
+        assertTrue(controller.contains("labelValue(\"Можно продать\""));
+        assertFalse(controller.contains("labelValue(\"Купить сейчас\""));
+        assertFalse(controller.contains("labelValue(\"Продать сейчас\""));
+        assertTrue(controller.contains("Ждёт продавца"));
+        assertTrue(controller.contains("Ждёт покупателя"));
+        assertTrue(controller.contains("Частично исполнено"));
+        assertTrue(controller.contains("Нужна проверка администратора"));
+        assertFalse(controller.contains("Ожидает продавца"), "statuses must sound human, not exchange-like");
+        assertFalse(controller.contains("Ожидает покупателя"));
+    }
+
+    @Test
+    void russianSearchExpandsIntoBoundedEnglishAliasGroups() throws Exception {
+        String read = source("com/valorcraft/vauction/application/AuctionReadService.java");
+        String repository = source("com/valorcraft/vauction/persistence/MarketReadRepository.java");
+        String vocabulary = source("com/valorcraft/vauction/item/SearchVocabulary.java");
+        assertTrue(read.contains("SearchVocabulary.groups(query)"));
+        assertTrue(repository.contains("item_search_name LIKE ? ESCAPE '\\\\'"));
+        assertTrue(repository.contains(" OR "), "aliases are OR-ed inside a word group");
+        assertTrue(repository.contains(" AND "), "word groups are AND-ed together");
+        assertTrue(vocabulary.contains("MAX_GROUPS"), "alias expansion must stay bounded");
+        assertTrue(vocabulary.contains("MAX_ALIASES"));
+        assertTrue(vocabulary.contains("\"медь\""));
+        assertTrue(vocabulary.contains("\"copper\""));
+        assertTrue(vocabulary.contains("\"слиток\""));
+        assertTrue(vocabulary.contains("\"ingot\""));
+        assertTrue(vocabulary.contains("\"руда\""));
+        assertTrue(vocabulary.contains("\"ore\""));
+    }
+
     private static int count(String source, String needle) {
         return source.split(java.util.regex.Pattern.quote(needle), -1).length - 1;
     }

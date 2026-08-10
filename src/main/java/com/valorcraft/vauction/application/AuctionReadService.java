@@ -10,6 +10,7 @@ import com.valorcraft.vauction.item.ItemCodecException;
 import com.valorcraft.vauction.item.ItemSnapshot;
 import com.valorcraft.vauction.item.ItemStackCodec;
 import com.valorcraft.vauction.item.MarketKeyStrategy;
+import com.valorcraft.vauction.item.SearchVocabulary;
 import com.valorcraft.vauction.persistence.DatabaseManager;
 import com.valorcraft.vauction.persistence.DeliveryRepository;
 import com.valorcraft.vauction.persistence.MarketReadRepository;
@@ -83,11 +84,12 @@ public final class AuctionReadService {
 
     public Page<MarketCard> markets(int requestedPage, String query) {
         long cutoff = System.currentTimeMillis() - RECENT_MARKET_MILLIS;
-        long total = database.query(c -> markets.count(c, query, cutoff));
+        List<List<String>> groups = SearchVocabulary.groups(query);
+        long total = database.query(c -> markets.count(c, groups, cutoff));
         int totalPages = Math.max(1, (int) Math.min(Integer.MAX_VALUE,
                 (total + PAGE_SIZE - 1) / PAGE_SIZE));
         int page = Math.min(Math.max(0, requestedPage), totalPages - 1);
-        List<MarketCard> rows = database.query(c -> markets.page(c, query, cutoff,
+        List<MarketCard> rows = database.query(c -> markets.page(c, groups, cutoff,
                 page * PAGE_SIZE, PAGE_SIZE));
         return new Page<>(rows, page, page > 0, page + 1 < totalPages, total, totalPages);
     }

@@ -298,8 +298,8 @@ public final class MarketController {
             if (visual.isEmpty()) visual = new ItemStack(Items.BARRIER);
             MarketSummary m = card.summary();
             ItemStack icon = GuiItems.decorateMarketItem(visual, List.of(
-                    MarketText.labelValue("Купить сейчас", moneyOrUnavailable(m.bestAsk()), MarketPalette.SUCCESS),
-                    MarketText.labelValue("Продать сейчас", moneyOrUnavailable(m.bestBid()), MarketPalette.SELL),
+                    MarketText.labelValue("Можно купить", moneyOrUnavailable(m.bestAsk()), MarketPalette.SUCCESS),
+                    MarketText.labelValue("Можно продать", moneyOrUnavailable(m.bestBid()), MarketPalette.SELL),
                     MarketText.labelValue("Последняя сделка", moneyOrDash(m.lastTradePrice()), MarketPalette.TEXT),
                     Component.empty(), MarketText.colored("ЛКМ → купить", MarketPalette.SUCCESS),
                     MarketText.colored("ПКМ → продать", MarketPalette.SELL)));
@@ -608,9 +608,9 @@ public final class MarketController {
             } else {
                 boolean buy = entry.side() == OrderSide.BUY;
                 boolean manual = entry.orderStatus() == OrderStatus.MANUAL_REVIEW;
-                String status = manual ? "⚠ Требуется проверка администрации"
-                        : entry.filledQuantity() > 0 ? "Исполнено " + entry.filledQuantity() + " из " + entry.originalQuantity()
-                        : buy ? "Ожидает продавца" : "Ожидает покупателя";
+                String status = manual ? "⚠ Нужна проверка администратора"
+                        : entry.filledQuantity() > 0 ? "Частично исполнено: " + entry.filledQuantity() + " из " + entry.originalQuantity()
+                        : buy ? "Ждёт продавца" : "Ждёт покупателя";
                 icon = GuiItems.decorateMarketItem(visual, List.of(
                         MarketText.action(buy ? "Покупка" : "Продажа",
                                 manual ? MarketPalette.WARNING : buy ? MarketPalette.SUCCESS : MarketPalette.SELL),
