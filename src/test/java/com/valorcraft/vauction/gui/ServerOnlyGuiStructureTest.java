@@ -78,10 +78,15 @@ class ServerOnlyGuiStructureTest {
     }
 
     @Test
-    void navigationReusesOneOpenMenuAndKnownMarketSellDoesNotReturnToPicker() throws Exception {
+    void navigationReusesOneOpenMenuAndEveryRenderPushesFullSync() throws Exception {
         String controller = source("com/valorcraft/vauction/gui/MarketController.java");
         assertTrue(controller.contains("player.containerMenu == s.menu"));
-        assertTrue(controller.contains("s.menu.broadcastChanges()"));
+        int openBox = controller.indexOf("private void openBox");
+        String box = controller.substring(openBox);
+        assertTrue(box.contains("fullSync(player, s.menu)"));
+        assertTrue(box.contains("ClientboundContainerSetContentPacket"));
+        assertTrue(box.contains("menu.getItems()"));
+        assertFalse(box.contains("broadcastChanges"), "per-slot deltas must not replace the full sync");
         assertTrue(controller.contains("createSellOrderFromInventory(player, s.unit"));
         int beginOrder = controller.indexOf("private void beginOrder");
         int renderEditor = controller.indexOf("private void renderEditor");
@@ -161,10 +166,87 @@ class ServerOnlyGuiStructureTest {
         assertFalse(catalogue.contains("\"Каталог\""), "catalogue must not link to itself");
         assertFalse(catalogue.contains("Продать"));
         assertFalse(catalogue.contains("Получить"));
-        assertTrue(catalogue.contains("searchNav"));
-        assertTrue(catalogue.contains("myNav"));
-        assertTrue(search.contains("\"Все товары\""), "search must offer filter reset");
+        assertTrue(catalogue.contains("catalogueInfo"));
+        assertTrue(catalogue.contains("\"Моё\""));
+        assertTrue(search.contains("\"Новый поиск\""), "search must offer a fresh query");
         assertTrue(my.contains("\"Каталог\""));
+        assertTrue(my.contains("myInfo"));
+    }
+
+    @Test
+    void catalogueAndBottomRowsUseOneFixedSpatialGrammar() throws Exception {
+        String controller = source("com/valorcraft/vauction/gui/MarketController.java");
+        assertTrue(controller.contains("NAV_PREVIOUS = 45"));
+        assertTrue(controller.contains("NAV_SEARCH = 47"));
+        assertTrue(controller.contains("NAV_INFO = 49"));
+        assertTrue(controller.contains("NAV_MY = 51"));
+        assertTrue(controller.contains("NAV_NEXT = 53"));
+        assertTrue(controller.contains("TRADE_BACK = 45"));
+        assertTrue(controller.contains("TRADE_SECONDARY = 47"));
+        assertTrue(controller.contains("TRADE_PRIMARY = 49"));
+        assertTrue(controller.contains("PRICE_MINUS = 30"));
+        assertTrue(controller.contains("PRICE_INFO = 31"));
+        assertTrue(controller.contains("PRICE_PLUS = 32"));
+        assertTrue(controller.contains("put(box, s, TRADE_PRIMARY, button(buy ? MarketIcons.PRIMARY_BUY"));
+        assertTrue(controller.contains("put(box, s, TRADE_PRIMARY, button(MarketIcons.SUBMIT_LIMIT"));
+        assertTrue(controller.contains("put(box, s, TRADE_SECONDARY, button(MarketIcons.MODE_SWITCH"));
+        assertTrue(controller.contains("put(box, s, NAV_INFO"));
+        assertTrue(controller.contains("MarketIcons.INFO_BOOK"), "info slot must not use raw materials");
+    }
+
+    @Test
+    void firstOpenAlwaysReceivesFullMenuSyncSoNavigationIsVisibleFromFirstFrame() throws Exception {
+        String controller = source("com/valorcraft/vauction/gui/MarketController.java");
+        int openBox = controller.indexOf("private void openBox");
+        String box = controller.substring(openBox);
+        assertTrue(box.contains("player.openMenu"));
+        assertTrue(box.contains("if (s.menu != null) fullSync(player, s.menu)"),
+                "fresh menu open must push full content immediately");
+        assertTrue(controller.contains("private static void fullSync"));
+    }
+
+    @Test
+    void quantityRowIsOneContiguousGroupWithVisibleCountsAndNoStepButtons() throws Exception {
+        String controller = source("com/valorcraft/vauction/gui/MarketController.java");
+        assertTrue(controller.contains("quantityPreset(box, s, 20, 1)"));
+        assertTrue(controller.contains("quantityPreset(box, s, 21, 16)"));
+        assertTrue(controller.contains("quantityPreset(box, s, 22, 32)"));
+        assertTrue(controller.contains("quantityPreset(box, s, 23, 64)"));
+        assertTrue(controller.contains("icon.setCount(Math.min(quantity, 64))"),
+                "presets must show their number on the item sprite");
+        assertTrue(controller.contains("quantityPreset(box, s, 22, 64)"), "sell row keeps 1/16/64");
+        assertTrue(controller.contains("put(box, s, 24, button(MarketIcons.EXACT"));
+        assertFalse(controller.contains("Items.RED_DYE"));
+        assertFalse(controller.contains("Items.LIME_DYE"));
+        assertFalse(controller.contains("ADJUST_QUANTITY\""));
+    }
+
+    @Test
+    void buttonsNeverUseRawMaterialIcons() throws Exception {
+        String forbidden = "(GLOWSTONE_DUST|REDSTONE|RED_DYE|LIME_DYE|GOLD_INGOT|IRON_INGOT"
+                + "|COPPER_INGOT|NETHERITE_INGOT|GOLD_NUGGET|IRON_NUGGET|RAW_GOLD|RAW_IRON"
+                + "|RAW_COPPER|DIAMOND)";
+        String controller = source("com/valorcraft/vauction/gui/MarketController.java");
+        java.util.regex.Matcher matcher = java.util.regex.Pattern
+                .compile("Items\\." + forbidden).matcher(controller);
+        assertFalse(matcher.find(), "raw-material icon used as a GUI button");
+        String icons = source("com/valorcraft/vauction/gui/MarketIcons.java");
+        assertTrue(icons.contains("FORBIDDEN"));
+        assertTrue(icons.contains("Items.GLOWSTONE_DUST"));
+    }
+
+    @Test
+    void exactQuantityAndPriceSurviveMenuCloseViaTimedDraft() throws Exception {
+        String controller = source("com/valorcraft/vauction/gui/MarketController.java");
+        String draft = source("com/valorcraft/vauction/gui/TradeDraft.java");
+        assertTrue(controller.contains("EXACT_QUANTITY"));
+        assertTrue(controller.contains("ClickEvent.Action.SUGGEST_COMMAND"));
+        assertTrue(controller.contains("reopenFromDraft(player, draft)"));
+        assertTrue(controller.contains("!draft.expired()"));
+        assertTrue(controller.contains("drafts.remove(player.getUUID())"));
+        assertTrue(draft.contains("TTL_MILLIS = 5 * 60 * 1000L"));
+        assertTrue(draft.contains("boolean expired()"));
+        assertTrue(controller.contains("session.pendingRequestId = UUID.randomUUID()"));
     }
 
     @Test
@@ -205,7 +287,7 @@ class ServerOnlyGuiStructureTest {
         assertTrue(controller.contains("private void renderEditor"));
         assertTrue(controller.contains("Своя цена"));
         assertTrue(controller.contains("✓ Выставить заявку"));
-        assertTrue(controller.contains("Точно: /ah quantity <число>"));
+        assertTrue(controller.contains("Затем: /ah quantity <число>"));
         assertTrue(controller.contains("Точно: /ah price <число>"));
         assertTrue(controller.contains("confirmOrder(player, s);"), "normal limit submission has no mandatory confirmation page");
         assertTrue(controller.contains("createBuyOrder(player.getUUID(), s.unit"));
