@@ -23,7 +23,9 @@ import com.valorcraft.vauction.persistence.SaleRepository;
 import com.valorcraft.vauction.persistence.TradeRepository;
 import com.valorcraft.vauction.persistence.PlayerMarketStateRepository;
 import com.valorcraft.vauction.recovery.RecoveryService;
+import com.valorcraft.vauction.gui.UiConfig;
 import net.minecraft.server.MinecraftServer;
+import net.minecraftforge.fml.loading.FMLPaths;
 import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
 
@@ -89,6 +91,8 @@ public final class VAuctionCore {
                 LOGGER.warn("VAuction отключён конфигом (enabled=false), функциональность не активна");
                 return;
             }
+            // 1a. конфиг интерфейса (тексты, цвета, лор, кнопки) — при ошибке остаются дефолты
+            UiConfig.start(FMLPaths.CONFIGDIR.get());
             // 2. проверка VEconomy (мод обязателен в mods.toml; проверяем фактическую готовность API)
             core.economyGateway = new VEconomyGateway();
             if (!core.economyGateway.isAvailable()) {

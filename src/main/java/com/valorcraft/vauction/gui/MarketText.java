@@ -9,15 +9,15 @@ final class MarketText {
     private MarketText() {}
 
     static Component brand() {
-        return colored("◆ Биржа ValorCraft", MarketPalette.BRAND);
+        return colored(UiConfig.text("brand"), MarketPalette.byKey("brand"));
     }
 
     static Component text(String text) {
-        return colored(text, MarketPalette.TEXT);
+        return colored(text, MarketPalette.byKey("text"));
     }
 
     static Component muted(String text) {
-        return colored(text, MarketPalette.MUTED);
+        return colored(text, MarketPalette.byKey("muted"));
     }
 
     static Component action(String text, TextColor color) {
@@ -26,17 +26,17 @@ final class MarketText {
 
     static Component labelValue(String label, String value, TextColor valueColor) {
         MutableComponent line = Component.literal(label + ": ")
-                .withStyle(style -> style.withColor(MarketPalette.MUTED));
+                .withStyle(style -> style.withColor(MarketPalette.byKey("muted")).withItalic(false));
         return line.append(colored(value, valueColor));
     }
 
     static Component colored(String text, TextColor color) {
-        return Component.literal(text).withStyle(style -> style.withColor(color));
+        return Component.literal(text).withStyle(style -> style.withColor(color).withItalic(false));
     }
 
     /** Короткая ровная строка-разделитель между блоком биржи и нативным tooltip предмета. */
     static Component divider() {
-        return colored("────────", MarketPalette.SEPARATOR);
+        return colored("────────", MarketPalette.byKey("separator"));
     }
 
     /** Мигающая строка в action bar (server-side). */

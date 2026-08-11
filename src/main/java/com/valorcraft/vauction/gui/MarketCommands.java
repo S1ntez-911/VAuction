@@ -87,8 +87,23 @@ final class MarketCommands {
                                 .suggests(MarketCommands::suggestClaims)
                                 .executes(ctx -> claim(ctx.getSource(), LongArgumentType.getLong(ctx, "deliveryId")))))
                 .then(Commands.literal("info").executes(ctx -> info(ctx.getSource())))
+                .then(Commands.literal("ui")
+                        .requires(source -> source.hasPermission(2))
+                        .then(Commands.literal("reload").executes(ctx -> uiReload(ctx.getSource()))))
                 .then(Commands.argument("unknown", StringArgumentType.greedyString())
                         .executes(ctx -> help(ctx.getSource())));
+    }
+
+    /** Перечитывает config/vauction-ui.json и переоткрывает сессии (только оп). */
+    private static int uiReload(CommandSourceStack source) {
+        String error = UiConfig.reload();
+        if (error != null) {
+            return fail(source, UiConfig.fmt("ui.badJson", "error", error));
+        }
+        MarketController.instance().clear();
+        source.sendSuccess(() -> Component.literal(UiConfig.text("ui.reloaded"))
+                .withStyle(ChatFormatting.GREEN), false);
+        return 1;
     }
 
     private static int open(CommandSourceStack source) {
