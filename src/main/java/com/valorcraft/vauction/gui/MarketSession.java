@@ -6,12 +6,14 @@ import net.minecraft.world.item.ItemStack;
 import net.minecraft.world.SimpleContainer;
 
 import java.util.HashMap;
+import java.util.LinkedHashMap;
 import java.util.Map;
 import java.util.UUID;
 
 final class MarketSession {
     final UUID playerId;
     final Map<Integer, GuiAction> actions = new HashMap<>();
+    final Map<String, String> placeholders = new LinkedHashMap<>();
     MarketScreen screen = MarketScreen.BROWSE;
     int page;
     int cataloguePage;
@@ -33,6 +35,8 @@ final class MarketSession {
     AuctionReadService.ImmediateQuote quote;
     SimpleContainer contents;
     ServerChestMenu menu;
+    MarketScreen openScreen;
+    int openRows;
 
     MarketSession(UUID playerId) {
         this.playerId = playerId;

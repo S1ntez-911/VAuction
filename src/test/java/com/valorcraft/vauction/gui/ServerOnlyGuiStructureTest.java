@@ -238,12 +238,12 @@ class ServerOnlyGuiStructureTest {
         assertFalse(catalogue.contains("Продать"));
         assertFalse(catalogue.contains("Получить"));
         assertTrue(catalogue.contains("catalogueInfo"));
-        assertTrue(catalogue.contains("uiButton(\"my\""), "catalogue must link to «Моё»");
-        assertTrue(search.contains("uiButton(\"newSearch\""), "search must offer a fresh query");
-        assertTrue(search.contains("uiButton(\"catalogue\""), "search must offer returning to the whole catalogue");
+        assertTrue(catalogue.contains("uiButton(s, \"my\""), "catalogue must link to «Моё»");
+        assertTrue(search.contains("uiButton(s, \"newSearch\""), "search must offer a fresh query");
+        assertTrue(search.contains("uiButton(s, \"catalogue\""), "search must offer returning to the whole catalogue");
         assertTrue(search.contains("GuiAction.simple(GuiAction.Type.BROWSE)"));
-        assertFalse(search.contains("uiButton(\"my\""), "«Моё» is not part of the search task");
-        assertTrue(my.contains("uiButton(\"allGoods\""));
+        assertFalse(search.contains("uiButton(s, \"my\""), "«Моё» is not part of the search task");
+        assertTrue(my.contains("uiButton(s, \"allGoods\""));
         assertTrue(my.contains("myInfo"));
     }
 
@@ -263,14 +263,14 @@ class ServerOnlyGuiStructureTest {
         assertTrue(controller.contains("CONFIRM_PRIMARY = 49"));
         assertFalse(controller.contains("PRICE_MINUS"), "percentage steppers are gone");
         assertFalse(controller.contains("PRICE_PLUS"));
-        assertTrue(controller.contains("uiButton(buy ? \"buyNow\" : \"sellNow\""));
-        assertTrue(controller.contains("uiButton(\"submitLimit\""));
-        assertTrue(controller.contains("uiButton(\"ownPrice\""), "mode switch on the immediate screen");
-        assertFalse(controller.contains("uiButton(\"modeNow\""),
+        assertTrue(controller.contains("uiButton(s, buy ? \"buyNow\" : \"sellNow\""));
+        assertTrue(controller.contains("uiButton(s, \"submitLimit\""));
+        assertTrue(controller.contains("uiButton(s, \"ownPrice\""), "mode switch on the immediate screen");
+        assertFalse(controller.contains("uiButton(s, \"modeNow\""),
                 "the limit screen must not add a redundant mode switch");
         assertTrue(controller.contains("UiConfig.slot(\"catalogue\", \"categories\")"));
         assertTrue(controller.contains("UiConfig.button(\"infoBook\")"));
-        assertTrue(controller.contains("uiButton(\"categories\""));
+        assertTrue(controller.contains("uiButton(s, \"categories\""));
         assertTrue(controller.contains("UiConfig.slot(\"categories\", \"all\")"));
         assertTrue(controller.contains("UiConfig.slot(\"categories\", \"machines\")"));
     }
@@ -281,8 +281,8 @@ class ServerOnlyGuiStructureTest {
         int openBox = controller.indexOf("private void openBox");
         String box = controller.substring(openBox);
         assertTrue(box.contains("player.openMenu"));
-        assertTrue(box.contains("UiConfig.text(\"window.title\")"),
-                "the reused vanilla menu must keep one stable, non-misleading title");
+        assertTrue(box.contains("screenTitle(s)"),
+                "each configurable screen must use its own placeholder-aware title");
         assertTrue(box.contains("if (s.menu != null) fullSync(player, s.menu)"),
                 "fresh menu open must push full content immediately");
         assertTrue(box.contains("player.getServer().execute"),
@@ -391,7 +391,7 @@ class ServerOnlyGuiStructureTest {
         assertTrue(controller.contains("private void renderProduct"));
         assertTrue(controller.contains("UiConfig.slot(\"product\", \"buy\")"));
         assertTrue(controller.contains("UiConfig.slot(\"product\", \"sell\")"));
-        assertTrue(controller.contains("uiButton(\"productSellDisabled\""));
+        assertTrue(controller.contains("uiButton(s, \"productSellDisabled\""));
         assertFalse(controller.contains("private void renderMarket("));
         assertFalse(controller.contains("private static void levelItems("));
     }
@@ -406,7 +406,7 @@ class ServerOnlyGuiStructureTest {
         assertTrue(screens.contains("PRICE_WARNING"));
         assertTrue(controller.contains("private void renderImmediateQuote"));
         assertTrue(controller.contains("private void renderEditor"));
-        assertTrue(controller.contains("uiButton(\"ownPrice\""));
+        assertTrue(controller.contains("uiButton(s, \"ownPrice\""));
         assertTrue(controller.contains("\"editor.submitBuy\""));
         assertTrue(controller.contains("\"editor.submitSell\""));
         assertTrue(controller.contains("\"editor.submitSummary\""));
@@ -428,7 +428,7 @@ class ServerOnlyGuiStructureTest {
         assertFalse(editor.contains("ADJUST_PRICE_PERCENT"));
         assertTrue(editor.contains("\"editor.price\""));
         assertTrue(editor.contains("/ шт."));
-        assertTrue(editor.contains("uiButton(\"priceInfo\""));
+        assertTrue(editor.contains("uiButton(s, \"priceInfo\""));
         assertEquals(1, count(editor, "UiConfig.slot(\"limit\", \"price\")"),
                 "price editing must be a single button, not a row of controls");
     }
@@ -450,7 +450,7 @@ class ServerOnlyGuiStructureTest {
         assertFalse(immediate.contains("Мин. цена"));
         assertFalse(immediate.contains("-10%"));
         assertFalse(immediate.contains("+10%"));
-        assertTrue(immediate.contains("uiButton(buy ? \"buyNow\" : \"sellNow\""));
+        assertTrue(immediate.contains("uiButton(s, buy ? \"buyNow\" : \"sellNow\""));
     }
 
     @Test

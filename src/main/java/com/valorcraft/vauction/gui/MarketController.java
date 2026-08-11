@@ -127,7 +127,7 @@ public final class MarketController {
         // Only ordinary left/right pickup clicks can invoke actions. QUICK_MOVE, SWAP,
         // CLONE, THROW, QUICK_CRAFT and PICKUP_ALL are all rejected without mutation.
         if (clickType != ClickType.PICKUP || (button != 0 && button != 1)) return;
-        if (slotId < 0 || slotId >= 54) return;
+        if (slotId < 0 || session.contents == null || slotId >= session.contents.getContainerSize()) return;
         GuiAction action = session.actions.get(slotId);
         if (action == null) return;
         session.executing = true;
@@ -300,7 +300,13 @@ public final class MarketController {
         String query = s.searchActive ? s.search : s.filter.query;
         Page<MarketCard> page = read().markets(s.cataloguePage, query, contentSlots.length);
         s.cataloguePage = page.page();
-        SimpleContainer box = blank();
+        context(player, s,
+                "category", UiConfig.text(s.filter == MarketFilter.ALL ? "filter.all" : s.filter.textKey),
+                "search", s.search,
+                "page", page.page() + 1,
+                "pages", page.totalPages(),
+                "results", page.items().size());
+        SimpleContainer box = blank(s);
         s.resetActions();
         int i = 0;
         for (MarketCard card : page.items()) {
@@ -312,17 +318,17 @@ public final class MarketController {
         }
         if (page.items().isEmpty() && s.screen == MarketScreen.SEARCH) {
             tell(player, UiConfig.fmt("chat.searchEmpty", "q", s.search), ChatFormatting.YELLOW);
-            box.setItem(UiConfig.slot(layout, "empty"), uiButton("emptySearch",
+            set(box, UiConfig.slot(layout, "empty"), uiButton(s, "emptySearch",
                     MarketText.action(UiConfig.text("empty.searchTitle"), MarketPalette.byKey("warning")),
                     List.of(MarketText.muted(UiConfig.text("empty.searchBody")),
                             MarketText.muted(UiConfig.text("empty.createFirst")),
                             MarketText.muted(UiConfig.text("empty.sellBuy")))));
         } else if (page.items().isEmpty() && s.filter != MarketFilter.ALL) {
-            box.setItem(UiConfig.slot(layout, "empty"), uiButton("emptyFilter",
+            set(box, UiConfig.slot(layout, "empty"), uiButton(s, "emptyFilter",
                     MarketText.text(UiConfig.text("empty.filterTitle")), List.of(
                             MarketText.muted(UiConfig.text("empty.filterBody")))));
         } else if (page.items().isEmpty()) {
-            box.setItem(UiConfig.slot(layout, "empty"), uiButton("emptyCatalogue",
+            set(box, UiConfig.slot(layout, "empty"), uiButton(s, "emptyCatalogue",
                     MarketText.text(UiConfig.text("empty.catalogTitle")), List.of(
                             MarketText.muted(UiConfig.text("empty.createFirst")),
                             MarketText.muted(UiConfig.text("empty.sellBuy")))));
@@ -348,7 +354,7 @@ public final class MarketController {
 
     private void renderProduct(ServerPlayer player, MarketSession s) {
         s.screen = MarketScreen.PRODUCT;
-        SimpleContainer box = blank();
+        SimpleContainer box = blank(s);
         s.resetActions();
         AuctionReadService.MarketView view = read().market(s.unit);
         MarketSummary summary = view == null ? null : view.card().summary();
@@ -356,6 +362,11 @@ public final class MarketController {
         long bid = summary == null ? 0 : summary.bestBid();
         long last = summary == null ? 0 : summary.lastTradePrice();
         int available = service().availableCount(player.getUUID(), s.unit);
+        context(player, s,
+                "available", available,
+                "buy_price", moneyOrUnavailable(ask),
+                "sell_price", moneyOrUnavailable(bid),
+                "last_price", moneyOrDash(last));
 
         LinkedHashMap<String, UiConfig.LineValue> values = new LinkedHashMap<>();
         values.put("product.title", new UiConfig.LineValue(null,
@@ -368,14 +379,15 @@ public final class MarketController {
                 moneyOrDash(last), "text"));
         values.put("product.available", new UiConfig.LineValue("product.available",
                 Integer.toString(available), available > 0 ? "text" : "muted"));
-        box.setItem(UiConfig.slot("product", "item"), GuiItems.marketDisplay(s.unit, UiConfig.lines("product", values)));
+        set(box, UiConfig.slot("product", "item"),
+                GuiItems.marketDisplay(s.unit, UiConfig.lines("product", values, s.placeholders)));
 
-        put(box, s, UiConfig.slot("product", "back"), uiButton("back", null, null), GuiAction.simple(GuiAction.Type.BACK));
+        put(box, s, UiConfig.slot("product", "back"), uiButton(s, "back", null, null), GuiAction.simple(GuiAction.Type.BACK));
         String buyName = UiConfig.text(ask > 0 ? "product.buyNow" : "product.buyOrder");
         String buyLore = ask > 0
                 ? UiConfig.fmt("product.nowAt", "price", CurrencyText.format(ask))
                 : UiConfig.text("product.orderLore");
-        put(box, s, UiConfig.slot("product", "buy"), uiButton("productBuy",
+        put(box, s, UiConfig.slot("product", "buy"), uiButton(s, "productBuy",
                 MarketText.action(buyName, MarketPalette.byKey("success")),
                 List.of(MarketText.muted(buyLore))), GuiAction.simple(GuiAction.Type.BUY));
 
@@ -384,11 +396,11 @@ public final class MarketController {
             String sellLore = bid > 0
                     ? UiConfig.fmt("product.nowAt", "price", CurrencyText.format(bid))
                     : UiConfig.text("product.orderLore");
-            put(box, s, UiConfig.slot("product", "sell"), uiButton("productSell",
+            put(box, s, UiConfig.slot("product", "sell"), uiButton(s, "productSell",
                     MarketText.action(sellName, MarketPalette.byKey("sell")),
                     List.of(MarketText.muted(sellLore))), GuiAction.simple(GuiAction.Type.SELL));
         } else {
-            put(box, s, UiConfig.slot("product", "sell"), uiButton("productSellDisabled", null, null), null);
+            put(box, s, UiConfig.slot("product", "sell"), uiButton(s, "productSellDisabled", null, null), null);
         }
         openBox(player, s, box);
     }
@@ -429,12 +441,21 @@ public final class MarketController {
                 : read().quoteSellNow(s.unit, s.quantity, player.getUUID());
         s.quote = quote;
         s.screen = MarketScreen.TRADE_IMMEDIATE;
-        SimpleContainer box = blank();
+        SimpleContainer box = blank(s);
         s.resetActions();
         boolean buy = s.orderSide == OrderSide.BUY;
         java.util.ArrayList<Component> lore = new java.util.ArrayList<>();
         AuctionReadService.MarketView market = read().market(s.unit);
         MarketSummary summary = market == null ? null : market.card().summary();
+        long shownPrice = summary == null ? 0 : (buy ? summary.bestAsk() : summary.bestBid());
+        context(player, s,
+                "quantity", quote.requestedQuantity(),
+                "requested", quote.requestedQuantity(),
+                "fillable", quote.fillableQuantity(),
+                "price", moneyOrUnavailable(shownPrice),
+                "total", quote.executable() ? CurrencyText.format(quote.expectedTotal()) : UiConfig.text("card.dash"),
+                "worst_price", quote.executable() ? CurrencyText.format(quote.worstExecutionPrice()) : UiConfig.text("card.dash"),
+                "available", available == Integer.MAX_VALUE ? "" : available);
         LinkedHashMap<String, UiConfig.LineValue> v = new LinkedHashMap<>();
         v.put("instant.action", new UiConfig.LineValue(null,
                 UiConfig.text(buy ? "instant.actionBuy" : "instant.actionSell"), buy ? "success" : "sell"));
@@ -457,19 +478,20 @@ public final class MarketController {
         } else {
             v.put("instant.offers", new UiConfig.LineValue(null, UiConfig.text("instant.offers"), "warning"));
         }
-        box.setItem(UiConfig.slot("immediate", "item"), GuiItems.marketDisplay(s.unit, UiConfig.lines("tradeNow", v)));
+        set(box, UiConfig.slot("immediate", "item"),
+                GuiItems.marketDisplay(s.unit, UiConfig.lines("tradeNow", v, s.placeholders)));
         quantityControls(box, s, s.orderSide, "immediate");
-        put(box, s, UiConfig.slot("immediate", "back"), uiButton("back", null, null), GuiAction.simple(GuiAction.Type.BACK));
-        put(box, s, UiConfig.slot("immediate", "ownPrice"), uiButton("ownPrice", null, null),
+        put(box, s, UiConfig.slot("immediate", "back"), uiButton(s, "back", null, null), GuiAction.simple(GuiAction.Type.BACK));
+        put(box, s, UiConfig.slot("immediate", "ownPrice"), uiButton(s, "ownPrice", null, null),
                 GuiAction.simple(buy ? GuiAction.Type.BUY : GuiAction.Type.SELL));
         if (quote.executable()) {
-            put(box, s, UiConfig.slot("immediate", "confirm"), uiButton(buy ? "buyNow" : "sellNow",
+            put(box, s, UiConfig.slot("immediate", "confirm"), uiButton(s, buy ? "buyNow" : "sellNow",
                     MarketText.action(UiConfig.text(buy ? "instant.buyNow" : "instant.sellNow"),
                             MarketPalette.byKey(buy ? "success" : "sell")),
                     List.of(MarketText.muted(UiConfig.text(buy ? "instant.buyNowLore" : "instant.sellNowLore")))),
                     GuiAction.simple(GuiAction.Type.CONFIRM_IMMEDIATE));
         } else {
-            put(box, s, UiConfig.slot("immediate", "confirm"), uiButton("disabledOffers", null, null), null);
+            put(box, s, UiConfig.slot("immediate", "confirm"), uiButton(s, "disabledOffers", null, null), null);
         }
         openBox(player, s, box);
     }
@@ -556,11 +578,18 @@ public final class MarketController {
     private void renderEditor(ServerPlayer player, MarketSession s) {
         s.screen = MarketScreen.TRADE_LIMIT;
         boolean buy = s.orderSide == OrderSide.BUY;
-        SimpleContainer box = blank();
+        SimpleContainer box = blank(s);
         s.resetActions();
         long total;
         try { total = Math.multiplyExact(s.price, (long) s.quantity); }
         catch (ArithmeticException ignored) { total = Long.MAX_VALUE; }
+        int available = s.orderSide == OrderSide.SELL
+                ? service().availableCount(player.getUUID(), s.unit) : 0;
+        context(player, s,
+                "quantity", s.quantity,
+                "price", CurrencyText.format(s.price),
+                "total", CurrencyText.format(total),
+                "available", s.orderSide == OrderSide.SELL ? available : "");
         LinkedHashMap<String, UiConfig.LineValue> v = new LinkedHashMap<>();
         v.put("editor.action", new UiConfig.LineValue(null,
                 UiConfig.text(s.orderSide == OrderSide.BUY ? "editor.actionBuy" : "editor.actionSell"),
@@ -572,20 +601,21 @@ public final class MarketController {
                 CurrencyText.format(total), "text"));
         if (s.orderSide == OrderSide.SELL) {
             v.put("editor.available", new UiConfig.LineValue("editor.available",
-                    Integer.toString(service().availableCount(player.getUUID(), s.unit)), "text"));
+                    Integer.toString(available), "text"));
         } else {
             v.put("editor.reserveNote", new UiConfig.LineValue(null,
                     UiConfig.text("editor.reserveNote"), "muted"));
         }
-        box.setItem(UiConfig.slot("limit", "item"), GuiItems.marketDisplay(s.unit, UiConfig.lines("tradeLimit", v)));
+        set(box, UiConfig.slot("limit", "item"),
+                GuiItems.marketDisplay(s.unit, UiConfig.lines("tradeLimit", v, s.placeholders)));
         quantityControls(box, s, s.orderSide, "limit");
-        put(box, s, UiConfig.slot("limit", "price"), uiButton("priceInfo",
+        put(box, s, UiConfig.slot("limit", "price"), uiButton(s, "priceInfo",
                         MarketText.action(UiConfig.fmt("editor.priceButton", "price", CurrencyText.format(s.price)),
                                 MarketPalette.byKey("info")),
                         List.of(MarketText.muted(UiConfig.text("editor.priceButtonLore")))),
                 GuiAction.simple(GuiAction.Type.EXACT_PRICE));
-        put(box, s, UiConfig.slot("limit", "back"), uiButton("back", null, null), GuiAction.simple(GuiAction.Type.BACK));
-        put(box, s, UiConfig.slot("limit", "submit"), uiButton("submitLimit",
+        put(box, s, UiConfig.slot("limit", "back"), uiButton(s, "back", null, null), GuiAction.simple(GuiAction.Type.BACK));
+        put(box, s, UiConfig.slot("limit", "submit"), uiButton(s, "submitLimit",
                 MarketText.action(UiConfig.text(buy ? "editor.submitBuy" : "editor.submitSell"),
                         buy ? MarketPalette.byKey("success") : MarketPalette.byKey("sell")),
                 List.of(MarketText.muted(UiConfig.fmt("editor.submitSummary",
@@ -610,7 +640,12 @@ public final class MarketController {
             return;
         }
         s.screen = MarketScreen.PRICE_WARNING;
-        SimpleContainer box = blank();
+        context(player, s,
+                "quantity", s.quantity,
+                "price", CurrencyText.format(s.price),
+                "total", safeTotal(s.price, s.quantity),
+                "market_price", CurrencyText.format(referencePrice(currentMarket)));
+        SimpleContainer box = blank(s);
         s.resetActions();
         LinkedHashMap<String, UiConfig.LineValue> v = new LinkedHashMap<>();
         v.put("warning.title", new UiConfig.LineValue(null, UiConfig.text("warning.title"), "warning"));
@@ -618,9 +653,9 @@ public final class MarketController {
                 UiConfig.text("warning.market") + CurrencyText.format(referencePrice(currentMarket)), "warning"));
         v.put("warning.mine", new UiConfig.LineValue(null,
                 UiConfig.text("warning.mine") + CurrencyText.format(s.price), "warning"));
-        box.setItem(22, GuiItems.marketDisplay(s.unit, UiConfig.lines("warning", v)));
-        put(box, s, CONFIRM_BACK, uiButton("warningChange", null, null), GuiAction.simple(GuiAction.Type.BACK));
-        put(box, s, CONFIRM_PRIMARY, uiButton("warningConfirm",
+        box.setItem(22, GuiItems.marketDisplay(s.unit, UiConfig.lines("warning", v, s.placeholders)));
+        put(box, s, CONFIRM_BACK, uiButton(s, "warningChange", null, null), GuiAction.simple(GuiAction.Type.BACK));
+        put(box, s, CONFIRM_PRIMARY, uiButton(s, "warningConfirm",
                 MarketText.action(UiConfig.text("button.warningConfirm"), MarketPalette.byKey("warning")),
                 List.of(MarketText.muted(UiConfig.text("button.warningConfirmLore")))),
                 GuiAction.simple(GuiAction.Type.CONFIRM_ORDER));
@@ -687,7 +722,11 @@ public final class MarketController {
         int[] contentSlots = UiConfig.slots("my", "content");
         Page<PlayerMarketActivity> page = read().playerActivity(player.getUUID(), s.page, contentSlots.length);
         s.page = page.page();
-        SimpleContainer box = blank();
+        context(player, s,
+                "page", page.page() + 1,
+                "pages", page.totalPages(),
+                "results", page.items().size());
+        SimpleContainer box = blank(s);
         s.resetActions();
         int i = 0;
         for (PlayerMarketActivity entry : page.items()) {
@@ -731,7 +770,7 @@ public final class MarketController {
             put(box, s, contentSlots[i++], icon, action);
         }
         if (page.items().isEmpty()) {
-            box.setItem(UiConfig.slot("my", "empty"), uiButton("emptyMy", MarketText.text(UiConfig.text("my.emptyTitle")),
+            set(box, UiConfig.slot("my", "empty"), uiButton(s, "emptyMy", MarketText.text(UiConfig.text("my.emptyTitle")),
                     List.of(MarketText.muted(UiConfig.text("my.emptyLine1")),
                             MarketText.muted(UiConfig.text("my.emptyLine2")))));
         }
@@ -746,7 +785,11 @@ public final class MarketController {
         s.quantity = Math.abs(action.number());
         s.price = action.amount();
         s.screen = MarketScreen.ORDER_MANAGE;
-        SimpleContainer box = blank();
+        context(player, s,
+                "quantity", s.quantity,
+                "price", CurrencyText.format(s.price),
+                "total", safeTotal(s.price, s.quantity));
+        SimpleContainer box = blank(s);
         s.resetActions();
         LinkedHashMap<String, UiConfig.LineValue> v = new LinkedHashMap<>();
         v.put("manage.side", new UiConfig.LineValue(null,
@@ -754,25 +797,30 @@ public final class MarketController {
                 s.orderSide == OrderSide.BUY ? "success" : "sell"));
         v.put("manage.price", new UiConfig.LineValue("manage.price", CurrencyText.format(s.price), "text"));
         v.put("manage.left", new UiConfig.LineValue("manage.left", Integer.toString(s.quantity), "text"));
-        box.setItem(UiConfig.slot("manage", "item"), GuiItems.marketDisplay(s.unit, UiConfig.lines("manage", v)));
-        put(box, s, UiConfig.slot("manage", "back"), uiButton("manageBack", null, null), GuiAction.simple(GuiAction.Type.BACK));
-        put(box, s, UiConfig.slot("manage", "cancel"), uiButton("manageCancel", null, null),
+        set(box, UiConfig.slot("manage", "item"),
+                GuiItems.marketDisplay(s.unit, UiConfig.lines("manage", v, s.placeholders)));
+        put(box, s, UiConfig.slot("manage", "back"), uiButton(s, "manageBack", null, null), GuiAction.simple(GuiAction.Type.BACK));
+        put(box, s, UiConfig.slot("manage", "cancel"), uiButton(s, "manageCancel", null, null),
                 GuiAction.simple(GuiAction.Type.PREPARE_CANCEL));
         openBox(player, s, box);
     }
 
     private void renderCancel(ServerPlayer player, MarketSession s) {
-        SimpleContainer box = blank();
+        context(player, s,
+                "quantity", s.quantity,
+                "price", CurrencyText.format(s.price),
+                "total", safeTotal(s.price, s.quantity));
+        SimpleContainer box = blank(s);
         s.resetActions();
         LinkedHashMap<String, UiConfig.LineValue> v = new LinkedHashMap<>();
         v.put("cancel.title", new UiConfig.LineValue(null, UiConfig.text("cancel.title"), "error"));
         v.put("cancel.body", new UiConfig.LineValue(null, UiConfig.text("cancel.body"), "text"));
-        List<Component> cancelLines = UiConfig.lines("cancel", v);
+        List<Component> cancelLines = UiConfig.lines("cancel", v, s.placeholders);
         Component cancelTitle = cancelLines.isEmpty() ? MarketText.text("") : cancelLines.get(0);
         List<Component> cancelLore = cancelLines.size() > 1 ? cancelLines.subList(1, cancelLines.size()) : List.of();
         box.setItem(22, GuiItems.namedButton(new ItemStack(Items.BARRIER), cancelTitle, cancelLore));
-        put(box, s, CONFIRM_BACK, uiButton("cancelNo", null, null), GuiAction.simple(GuiAction.Type.BACK));
-        put(box, s, CONFIRM_PRIMARY, uiButton("cancelYes",
+        put(box, s, CONFIRM_BACK, uiButton(s, "cancelNo", null, null), GuiAction.simple(GuiAction.Type.BACK));
+        put(box, s, CONFIRM_PRIMARY, uiButton(s, "cancelYes",
                 MarketText.action(UiConfig.text("button.cancelYes"), MarketPalette.byKey("error")),
                 List.of(MarketText.muted(UiConfig.text("button.cancelYesLore")))),
                 GuiAction.simple(GuiAction.Type.CONFIRM_CANCEL));
@@ -849,8 +897,10 @@ public final class MarketController {
     }
 
     private void openBox(ServerPlayer player, MarketSession s, SimpleContainer box) {
-        if (s.menu != null && s.contents != null && player.containerMenu == s.menu) {
-            for (int slot = 0; slot < 54; slot++) s.contents.setItem(slot, box.getItem(slot));
+        int rows = box.getContainerSize() / 9;
+        if (s.menu != null && s.contents != null && player.containerMenu == s.menu
+                && s.openScreen == s.screen && s.openRows == rows) {
+            for (int slot = 0; slot < box.getContainerSize(); slot++) s.contents.setItem(slot, box.getItem(slot));
             fullSync(player, s.menu);
             return;
         }
@@ -859,11 +909,11 @@ public final class MarketController {
             player.openMenu(new SimpleMenuProvider((id, inventory, ignored) -> {
                 s.containerId = id;
                 s.contents = box;
-                s.menu = new ServerChestMenu(id, inventory, box, this, s);
+                s.openScreen = s.screen;
+                s.openRows = rows;
+                s.menu = new ServerChestMenu(id, inventory, box, rows, this, s);
                 return s.menu;
-            // Vanilla container titles cannot change while one menu is reused. Keep
-            // one honest title; each screen identifies itself through its contents.
-            }, MarketText.colored(UiConfig.text("window.title"), MarketPalette.byKey("brand"))));
+            }, MarketText.colored(screenTitle(s), MarketPalette.byKey("brand"))));
         } finally {
             s.transitioning = false;
         }
@@ -888,29 +938,77 @@ public final class MarketController {
                 menu.containerId, menu.incrementStateId(), menu.getItems(), menu.getCarried()));
     }
 
-    private static SimpleContainer blank() {
-        return new SimpleContainer(54);
+    private static SimpleContainer blank(MarketSession s) {
+        return new SimpleContainer(screenRows(s.screen) * 9);
+    }
+
+    private static void context(ServerPlayer player, MarketSession s, Object... values) {
+        s.placeholders.clear();
+        s.placeholders.put("player", player.getGameProfile().getName());
+        String screen = layoutKey(s.screen);
+        s.placeholders.put("screen", screen == null ? s.screen.name().toLowerCase(java.util.Locale.ROOT) : screen);
+        s.placeholders.put("item", s.unit.isEmpty() ? "" : s.unit.getHoverName().getString());
+        s.placeholders.put("side", s.orderSide == null ? ""
+                : UiConfig.text(s.orderSide == OrderSide.BUY ? "my.purchase" : "my.sell"));
+        for (int i = 0; i + 1 < values.length; i += 2) {
+            s.placeholders.put(String.valueOf(values[i]), String.valueOf(values[i + 1]));
+        }
+    }
+
+    private static String safeTotal(long price, int quantity) {
+        try {
+            return CurrencyText.format(Math.multiplyExact(price, (long) quantity));
+        } catch (ArithmeticException ignored) {
+            return UiConfig.text("card.dash");
+        }
+    }
+
+    private static int screenRows(MarketScreen screen) {
+        String key = layoutKey(screen);
+        return key == null ? 6 : UiConfig.rows(key);
+    }
+
+    private static String screenTitle(MarketSession s) {
+        String key = layoutKey(s.screen);
+        if (key != null) return UiConfig.title(key, s.placeholders);
+        return UiConfig.text(s.screen == MarketScreen.PRICE_WARNING ? "window.priceWarning" : "window.cancel");
+    }
+
+    private static String layoutKey(MarketScreen screen) {
+        return switch (screen) {
+            case BROWSE -> "catalogue";
+            case SEARCH -> "search";
+            case CATEGORIES -> "categories";
+            case PRODUCT -> "product";
+            case TRADE_IMMEDIATE -> "immediate";
+            case TRADE_LIMIT -> "limit";
+            case MY -> "my";
+            case ORDER_MANAGE -> "manage";
+            case PRICE_WARNING, CONFIRM_CANCEL -> null;
+        };
     }
 
     private static void catalogueNavigation(SimpleContainer box, MarketSession s, Page<?> page) {
         pageEdges(box, s, page, "catalogue");
         String category = UiConfig.text(s.filter == MarketFilter.ALL ? "filter.all" : s.filter.textKey);
-        put(box, s, UiConfig.slot("catalogue", "categories"), uiButton("categories",
+        put(box, s, UiConfig.slot("catalogue", "categories"), uiButton(s, "categories",
                         MarketText.action(UiConfig.text("button.categories"), MarketPalette.byKey("brand")),
                         List.of(MarketText.muted(UiConfig.fmt("button.categoriesCurrent", "category", category)))),
                 GuiAction.simple(GuiAction.Type.OPEN_FILTERS));
-        put(box, s, UiConfig.slot("catalogue", "search"), uiButton("search", null, null),
+        put(box, s, UiConfig.slot("catalogue", "search"), uiButton(s, "search", null, null),
                 GuiAction.simple(GuiAction.Type.SEARCH_HELP));
         catalogueInfo(box, s, page);
-        put(box, s, UiConfig.slot("catalogue", "my"), uiButton("my", null, null),
+        put(box, s, UiConfig.slot("catalogue", "my"), uiButton(s, "my", null, null),
                 GuiAction.simple(GuiAction.Type.MY));
     }
 
     private void renderCategories(ServerPlayer player, MarketSession s) {
         s.screen = MarketScreen.CATEGORIES;
-        SimpleContainer box = blank();
+        context(player, s, "category",
+                UiConfig.text(s.filter == MarketFilter.ALL ? "filter.all" : s.filter.textKey));
+        SimpleContainer box = blank(s);
         s.resetActions();
-        box.setItem(UiConfig.slot("categories", "header"), uiButton("categoriesHeader",
+        set(box, UiConfig.slot("categories", "header"), uiButton(s, "categoriesHeader",
                 MarketText.colored(UiConfig.text("filter.title"), MarketPalette.byKey("brand")),
                 List.of(MarketText.muted(UiConfig.text("filter.titleLore")))));
         filterButton(box, s, UiConfig.slot("categories", "all"), MarketFilter.ALL);
@@ -918,7 +1016,7 @@ public final class MarketController {
         filterButton(box, s, UiConfig.slot("categories", "food"), MarketFilter.FOOD);
         filterButton(box, s, UiConfig.slot("categories", "tools"), MarketFilter.TOOLS);
         filterButton(box, s, UiConfig.slot("categories", "machines"), MarketFilter.MACHINES);
-        put(box, s, UiConfig.slot("categories", "back"), uiButton("back", null, null), GuiAction.simple(GuiAction.Type.BACK));
+        put(box, s, UiConfig.slot("categories", "back"), uiButton(s, "back", null, null), GuiAction.simple(GuiAction.Type.BACK));
         openBox(player, s, box);
     }
 
@@ -933,33 +1031,33 @@ public final class MarketController {
             case TOOLS -> "filterTools";
             case MACHINES -> "filterMachines";
         };
-        put(box, s, slot, uiButton(buttonKey, name,
+        put(box, s, slot, uiButton(s, buttonKey, name,
                         List.of(MarketText.muted(UiConfig.text(active ? "filter.active" : "filter.open")))),
                 active ? null : GuiAction.number(GuiAction.Type.FILTER, filter.ordinal()));
     }
 
     private static void searchNavigation(SimpleContainer box, MarketSession s, Page<?> page) {
         pageEdges(box, s, page, "search");
-        put(box, s, UiConfig.slot("search", "newSearch"), uiButton("newSearch", null, null),
+        put(box, s, UiConfig.slot("search", "newSearch"), uiButton(s, "newSearch", null, null),
                 GuiAction.simple(GuiAction.Type.SEARCH_HELP));
         catalogueInfo(box, s, page);
-        put(box, s, UiConfig.slot("search", "catalogue"), uiButton("catalogue", null, null),
+        put(box, s, UiConfig.slot("search", "catalogue"), uiButton(s, "catalogue", null, null),
                 GuiAction.simple(GuiAction.Type.BROWSE));
     }
 
     private static void myNavigation(SimpleContainer box, MarketSession s, Page<?> page) {
         pageEdges(box, s, page, "my");
         myInfo(box, s, page);
-        put(box, s, UiConfig.slot("my", "catalogue"), uiButton("allGoods", null, null),
+        put(box, s, UiConfig.slot("my", "catalogue"), uiButton(s, "allGoods", null, null),
                 GuiAction.simple(GuiAction.Type.HOME));
     }
 
     private static void pageEdges(SimpleContainer box, MarketSession s, Page<?> page, String layout) {
         if (page.hasPrevious()) put(box, s, UiConfig.slot(layout, "previous"),
-                uiButton("prev", null, null),
+                uiButton(s, "prev", null, null),
                 GuiAction.number(GuiAction.Type.PAGE, -1));
         if (page.hasNext()) put(box, s, UiConfig.slot(layout, "next"),
-                uiButton("next", null, null),
+                uiButton(s, "next", null, null),
                 GuiAction.number(GuiAction.Type.PAGE, 1));
     }
 
@@ -978,7 +1076,7 @@ public final class MarketController {
         String title = s.filter == MarketFilter.ALL ? UiConfig.text("nav.infoTitle") : UiConfig.text(s.filter.textKey);
         put(box, s, UiConfig.slot(s.screen == MarketScreen.SEARCH ? "search" : "catalogue", "info"),
                 buttonOn(new ItemStack(UiConfig.button("infoBook").iconItem()), UiConfig.button("infoBook"),
-                MarketText.colored(title, MarketPalette.byKey("brand")), lore),
+                MarketText.colored(title, MarketPalette.byKey("brand")), lore, s.placeholders),
                 null);
     }
 
@@ -995,12 +1093,18 @@ public final class MarketController {
         lore.add(MarketText.muted(UiConfig.text("nav.ordersHint")));
         put(box, s, UiConfig.slot("my", "info"),
                 buttonOn(new ItemStack(UiConfig.button("infoBook").iconItem()), UiConfig.button("infoBook"),
-                MarketText.colored(UiConfig.text("nav.myTitle"), MarketPalette.byKey("brand")), lore), null);
+                MarketText.colored(UiConfig.text("nav.myTitle"), MarketPalette.byKey("brand")), lore,
+                        s.placeholders), null);
     }
 
     private static void put(SimpleContainer box, MarketSession s, int slot, ItemStack item, GuiAction action) {
+        if (slot < 0) return;
         box.setItem(slot, item.copy());
         if (action != null) s.actions.put(slot, action);
+    }
+
+    private static void set(SimpleContainer box, int slot, ItemStack item) {
+        if (slot >= 0) box.setItem(slot, item);
     }
 
     private static ItemStack button(net.minecraft.world.item.Item item, String name, String lore) {
@@ -1013,9 +1117,9 @@ public final class MarketController {
     }
 
     /** Кнопка из UiConfig: иконка и подписи берутся из конфига, переопределяются при необходимости. */
-    private static ItemStack uiButton(String key, Component name, List<Component> lore) {
+    private static ItemStack uiButton(MarketSession s, String key, Component name, List<Component> lore) {
         UiConfig.ButtonCfg cfg = UiConfig.button(key);
-        return buttonOn(new ItemStack(cfg.iconItem()), cfg, name, lore);
+        return buttonOn(new ItemStack(cfg.iconItem()), cfg, name, lore, s.placeholders);
     }
 
     private static void quantityControls(SimpleContainer box, MarketSession s, OrderSide side, String layout) {
@@ -1024,19 +1128,19 @@ public final class MarketController {
             quantityPreset(box, s, UiConfig.slot(layout, "quantityBulk"), 64);
         } else {
             quantityPreset(box, s, UiConfig.slot(layout, "quantityOne"), 1);
-            put(box, s, UiConfig.slot(layout, "quantityBulk"), uiButton("quantityAll",
+            put(box, s, UiConfig.slot(layout, "quantityBulk"), uiButton(s, "quantityAll",
                     MarketText.action(UiConfig.text("quantity.all"), MarketPalette.byKey("sell")),
                     List.of(MarketText.muted(UiConfig.text("button.quantityAllLore")))),
                     GuiAction.simple(GuiAction.Type.SET_MAX_QUANTITY));
         }
-        put(box, s, UiConfig.slot(layout, "quantityOther"), uiButton("quantityOther",
+        put(box, s, UiConfig.slot(layout, "quantityOther"), uiButton(s, "quantityOther",
                 MarketText.action(UiConfig.text("quantity.other"), MarketPalette.byKey("text")),
                 List.of(MarketText.muted(UiConfig.text("button.quantityOtherLore")))),
                 GuiAction.simple(GuiAction.Type.EXACT_QUANTITY));
     }
 
     private static void quantityPreset(SimpleContainer box, MarketSession s, int slot, int quantity) {
-        ItemStack icon = uiButton("quantityPreset",
+        ItemStack icon = uiButton(s, "quantityPreset",
                 MarketText.colored(quantity == 1 ? UiConfig.text("quantity.one") : Integer.toString(quantity),
                         MarketPalette.byKey("brand")),
                 List.of(MarketText.muted(UiConfig.text("button.quantityPresetLore"))));
@@ -1079,18 +1183,22 @@ public final class MarketController {
         return UiConfig.lines("catalogCard", v);
     }
 
-    private static ItemStack buttonOn(ItemStack stack, UiConfig.ButtonCfg cfg, Component name, List<Component> lore) {
+    private static ItemStack buttonOn(ItemStack stack, UiConfig.ButtonCfg cfg, Component name,
+                                      List<Component> lore, Map<String, String> placeholders) {
         Component configuredName = cfg.name() != null
-                ? MarketText.colored(cfg.name(), MarketPalette.byKey(cfg.colorKey()))
+                ? MarketText.colored(UiConfig.format(cfg.name(), placeholders), MarketPalette.byKey(cfg.colorKey()))
                 : cfg.nameKey() == null ? Component.empty()
-                : MarketText.colored(UiConfig.text(cfg.nameKey()), MarketPalette.byKey(cfg.colorKey()));
+                : MarketText.colored(UiConfig.format(UiConfig.text(cfg.nameKey()), placeholders),
+                        MarketPalette.byKey(cfg.colorKey()));
         List<Component> configuredLore;
         if (!cfg.lore().isEmpty()) {
             configuredLore = cfg.lore().stream()
-                    .map(line -> MarketText.colored(line, MarketPalette.byKey(cfg.loreColorKey())))
+                    .map(line -> MarketText.colored(UiConfig.format(line, placeholders),
+                            MarketPalette.byKey(cfg.loreColorKey())))
                     .toList();
         } else if (cfg.loreKey() != null) {
-            configuredLore = List.of(MarketText.colored(UiConfig.text(cfg.loreKey()),
+            configuredLore = List.of(MarketText.colored(
+                    UiConfig.format(UiConfig.text(cfg.loreKey()), placeholders),
                     MarketPalette.byKey(cfg.loreColorKey())));
         } else {
             configuredLore = List.of();

@@ -47,6 +47,9 @@ public final class UiConfig {
     /** Одна строка лора: метка может отсутствовать (тогда строка без «: »). */
     record LineValue(String labelKey, String text, String colorKey) {}
 
+    /** Vanilla chest screen: 1..6 rows, custom title with contextual placeholders. */
+    record ScreenCfg(int rows, String title) {}
+
     /** Кнопка: иконка + ключи имени и подписи (nameKey может отсутствовать, имя задаётся кодом). */
     record ButtonCfg(Item iconItem, String nameKey, String loreKey,
                      String name, List<String> lore, String colorKey, String loreColorKey) {
@@ -67,13 +70,36 @@ public final class UiConfig {
     private static final LinkedHashMap<String, List<String>> LORE = new LinkedHashMap<>();
     private static final LinkedHashMap<String, ButtonCfg> BUTTONS = new LinkedHashMap<>();
     private static final LinkedHashMap<String, LinkedHashMap<String, List<Integer>>> LAYOUTS = new LinkedHashMap<>();
+    private static final LinkedHashMap<String, ScreenCfg> SCREENS = new LinkedHashMap<>();
+    private static final LinkedHashMap<String, String> PLACEHOLDER_HELP = new LinkedHashMap<>();
 
     private static volatile LinkedHashMap<String, String> texts = new LinkedHashMap<>();
     private static volatile LinkedHashMap<String, List<String>> lore = new LinkedHashMap<>();
     private static volatile LinkedHashMap<String, ButtonCfg> buttons = new LinkedHashMap<>();
     private static volatile LinkedHashMap<String, LinkedHashMap<String, List<Integer>>> layouts = new LinkedHashMap<>();
+    private static volatile LinkedHashMap<String, ScreenCfg> screens = new LinkedHashMap<>();
 
     static {
+        PLACEHOLDER_HELP.put("player", "Имя игрока");
+        PLACEHOLDER_HELP.put("screen", "Ключ текущего экрана");
+        PLACEHOLDER_HELP.put("item", "Название выбранного предмета");
+        PLACEHOLDER_HELP.put("side", "Покупка или продажа");
+        PLACEHOLDER_HELP.put("quantity", "Выбранное количество");
+        PLACEHOLDER_HELP.put("price", "Цена за одну штуку");
+        PLACEHOLDER_HELP.put("total", "Итоговая сумма");
+        PLACEHOLDER_HELP.put("available", "Доступное количество предмета");
+        PLACEHOLDER_HELP.put("buy_price", "Лучшая цена продажи на рынке");
+        PLACEHOLDER_HELP.put("sell_price", "Лучшая цена покупки на рынке");
+        PLACEHOLDER_HELP.put("last_price", "Цена последней сделки");
+        PLACEHOLDER_HELP.put("requested", "Запрошенное количество");
+        PLACEHOLDER_HELP.put("fillable", "Количество, доступное для мгновенной сделки");
+        PLACEHOLDER_HELP.put("worst_price", "Предельная цена мгновенной сделки");
+        PLACEHOLDER_HELP.put("category", "Текущий раздел каталога");
+        PLACEHOLDER_HELP.put("search", "Текущий поисковый запрос");
+        PLACEHOLDER_HELP.put("page", "Текущая страница, начиная с 1");
+        PLACEHOLDER_HELP.put("pages", "Общее количество страниц");
+        PLACEHOLDER_HELP.put("results", "Количество найденных записей на странице");
+
         TEXTS.put("brand", "◆ Биржа ValorCraft");
         TEXTS.put("window.title", "Биржа ValorCraft");
         TEXTS.put("window.catalogue", "Биржа: каталог");
@@ -371,6 +397,15 @@ public final class UiConfig {
     }
 
     static {
+        screen("catalogue", 6, "Биржа: каталог");
+        screen("search", 6, "Биржа: поиск «{search}»");
+        screen("categories", 6, "Биржа: разделы");
+        screen("product", 6, "Биржа: {item}");
+        screen("immediate", 6, "Биржа: {side}");
+        screen("limit", 6, "Заявка: {side}");
+        screen("my", 6, "Биржа: моё");
+        screen("manage", 6, "Биржа: заявка");
+
         layout("catalogue",
                 "content", range(0, 45), "empty", 22, "previous", 45,
                 "categories", 46, "search", 48, "info", 49, "my", 50, "next", 53);
@@ -411,6 +446,12 @@ public final class UiConfig {
                     .getAsJsonObject();
             JsonObject defaults = JsonParser.parseString(defaultJson()).getAsJsonObject();
             boolean upgraded = mergeMissing(root, defaults);
+            if (!root.has("format") || !root.get("format").isJsonPrimitive()
+                    || !root.getAsJsonPrimitive("format").isNumber()
+                    || root.get("format").getAsInt() < 3) {
+                root.addProperty("format", 3);
+                upgraded = true;
+            }
             LinkedHashMap<String, String> t = new LinkedHashMap<>(TEXTS);
             JsonObject jt = obj(root, "texts");
             if (jt != null) t.putAll(stringsOf(jt));
@@ -421,10 +462,14 @@ public final class UiConfig {
             JsonObject jb = obj(root, "buttons");
             if (jb != null) b.putAll(buttonsOf(jb));
             validateButtons(b);
+            LinkedHashMap<String, ScreenCfg> sc = new LinkedHashMap<>(SCREENS);
+            JsonObject jScreens = obj(root, "screens");
+            if (jScreens != null) applyScreens(sc, jScreens);
+            validateScreens(sc);
             LinkedHashMap<String, LinkedHashMap<String, List<Integer>>> ly = copyLayouts(LAYOUTS);
             JsonObject jLayouts = obj(root, "layouts");
             if (jLayouts != null) applyLayouts(ly, jLayouts);
-            validateLayouts(ly);
+            validateLayouts(ly, sc);
             LinkedHashMap<String, String> colors = stringsOf(obj(root, "colors"));
             validateColors(colors);
 
@@ -433,6 +478,7 @@ public final class UiConfig {
             texts = t;
             lore = l;
             buttons = b;
+            screens = sc;
             layouts = ly;
             MarketPalette.replace(colors);
             if (upgraded) {
@@ -448,8 +494,11 @@ public final class UiConfig {
 
     private static String defaultJson() {
         JsonObject root = new JsonObject();
-        root.addProperty("format", 2);
-        root.addProperty("help", "Слоты сундука: 0..53. layouts меняет только расположение; названия действий менять нельзя.");
+        root.addProperty("format", 3);
+        root.addProperty("help", "Ширина всегда 9. screens.rows задаёт 1..6 рядов. В layouts число ставит элемент в слот, null скрывает его. Действия кнопок остаются неизменными.");
+        JsonObject placeholderHelp = new JsonObject();
+        PLACEHOLDER_HELP.forEach(placeholderHelp::addProperty);
+        root.add("placeholderHelp", placeholderHelp);
         JsonObject colors = new JsonObject();
         for (Map.Entry<String, String> e : MarketPalette.DEFAULT_COLORS.entrySet()) {
             colors.addProperty(e.getKey(), e.getValue());
@@ -484,6 +533,14 @@ public final class UiConfig {
             buttons.add(e.getKey(), b);
         }
         root.add("buttons", buttons);
+        JsonObject screens = new JsonObject();
+        SCREENS.forEach((key, cfg) -> {
+            JsonObject value = new JsonObject();
+            value.addProperty("rows", cfg.rows());
+            value.addProperty("title", cfg.title());
+            screens.add(key, value);
+        });
+        root.add("screens", screens);
         root.add("layouts", layoutsJson(LAYOUTS));
         return new GsonBuilder().setPrettyPrinting().disableHtmlEscaping().create().toJson(root);
     }
@@ -495,6 +552,16 @@ public final class UiConfig {
             v = v.replace("{" + placeholders[i] + "}", String.valueOf(placeholders[i + 1]));
         }
         return v;
+    }
+
+    /** Replaces known placeholders and intentionally leaves unknown ones visible. */
+    static String format(String template, Map<String, String> placeholders) {
+        if (template == null || template.isEmpty() || placeholders == null || placeholders.isEmpty()) return template;
+        String result = template;
+        for (Map.Entry<String, String> entry : placeholders.entrySet()) {
+            result = result.replace("{" + entry.getKey() + "}", entry.getValue() == null ? "" : entry.getValue());
+        }
+        return result;
     }
 
     static String text(String key) {
@@ -512,8 +579,21 @@ public final class UiConfig {
         return cfg == null ? BUTTONS.getOrDefault(key, new ButtonCfg(Items.BARRIER, null, null)) : cfg;
     }
 
+    static int rows(String screen) {
+        ScreenCfg cfg = screens.get(screen);
+        if (cfg == null) cfg = SCREENS.get(screen);
+        return cfg == null ? 6 : cfg.rows();
+    }
+
+    static String title(String screen, Map<String, String> placeholders) {
+        ScreenCfg cfg = screens.get(screen);
+        if (cfg == null) cfg = SCREENS.get(screen);
+        return format(cfg == null ? text("window.title") : cfg.title(), placeholders);
+    }
+
     static int slot(String screen, String key) {
         List<Integer> values = layoutValues(screen, key);
+        if (values.isEmpty()) return -1;
         if (values.size() != 1) throw new IllegalStateException("UI slot is not scalar: " + screen + "." + key);
         return values.get(0);
     }
@@ -544,6 +624,21 @@ public final class UiConfig {
      * какие строки реально показать (частичное исполнение, доступность и т.п.).
      */
     static List<Component> lines(String block, LinkedHashMap<String, LineValue> values) {
+        return lines(block, values, Map.of());
+    }
+
+    static List<Component> lines(String block, LinkedHashMap<String, LineValue> values,
+                                 Map<String, String> placeholders) {
+        LinkedHashMap<String, String> resolved = new LinkedHashMap<>();
+        if (placeholders != null) resolved.putAll(placeholders);
+        for (Map.Entry<String, LineValue> entry : values.entrySet()) {
+            if (entry.getValue() == null || entry.getValue().text() == null) continue;
+            resolved.putIfAbsent(entry.getKey(), entry.getValue().text());
+            int dot = entry.getKey().lastIndexOf('.');
+            if (dot >= 0 && dot + 1 < entry.getKey().length()) {
+                resolved.putIfAbsent(entry.getKey().substring(dot + 1), entry.getValue().text());
+            }
+        }
         List<Component> out = new ArrayList<>();
         for (String token : loreTokens(block)) {
             if (token.equals("empty")) {
@@ -553,20 +648,22 @@ public final class UiConfig {
             } else if (token.startsWith("title:")) {
                 LineValue v = values.get(token.substring(6));
                 if (v != null && v.text() != null && !v.text().isEmpty()) {
-                    out.add(MarketText.action(v.text(), MarketPalette.byKey(v.colorKey())));
+                    out.add(MarketText.action(format(v.text(), resolved), MarketPalette.byKey(v.colorKey())));
                 }
             } else if (token.startsWith("value:")) {
                 LineValue v = values.get(token.substring(6));
                 if (v != null && v.text() != null && !v.text().isEmpty()) {
                     out.add(v.labelKey() == null
-                            ? MarketText.colored(v.text(), MarketPalette.byKey(v.colorKey()))
-                            : MarketText.labelValue(text(v.labelKey()), v.text(), MarketPalette.byKey(v.colorKey())));
+                            ? MarketText.colored(format(v.text(), resolved), MarketPalette.byKey(v.colorKey()))
+                            : MarketText.labelValue(format(text(v.labelKey()), resolved),
+                            format(v.text(), resolved), MarketPalette.byKey(v.colorKey())));
                 }
             } else if (token.startsWith("text:")) {
                 String[] parts = token.substring(5).split("@", 2);
-                out.add(MarketText.colored(text(parts[0]), MarketPalette.byKey(parts.length > 1 ? parts[1] : "text")));
+                out.add(MarketText.colored(format(text(parts[0]), resolved),
+                        MarketPalette.byKey(parts.length > 1 ? parts[1] : "text")));
             } else if (token.startsWith("muted:")) {
-                out.add(MarketText.muted(text(token.substring(6))));
+                out.add(MarketText.muted(format(text(token.substring(6)), resolved)));
             }
         }
         return out;
@@ -663,6 +760,10 @@ public final class UiConfig {
         LAYOUTS.put(screen, values);
     }
 
+    private static void screen(String key, int rows, String title) {
+        SCREENS.put(key, new ScreenCfg(rows, title));
+    }
+
     private static List<Integer> range(int startInclusive, int endExclusive) {
         ArrayList<Integer> result = new ArrayList<>();
         for (int i = startInclusive; i < endExclusive; i++) result.add(i);
@@ -696,7 +797,9 @@ public final class UiConfig {
                 }
                 JsonElement element = values.get(key);
                 ArrayList<Integer> parsed = new ArrayList<>();
-                if (element.isJsonPrimitive() && element.getAsJsonPrimitive().isNumber()) {
+                if (element.isJsonNull()) {
+                    // null hides a scalar UI element without changing its action or implementation.
+                } else if (element.isJsonPrimitive() && element.getAsJsonPrimitive().isNumber()) {
                     parsed.add(element.getAsInt());
                 } else if (element.isJsonArray()) {
                     for (JsonElement slot : element.getAsJsonArray()) {
@@ -713,21 +816,49 @@ public final class UiConfig {
         }
     }
 
-    private static void validateLayouts(Map<String, ? extends Map<String, List<Integer>>> configured) {
+    private static void applyScreens(LinkedHashMap<String, ScreenCfg> target, JsonObject configured) {
+        for (String key : configured.keySet()) {
+            if (!target.containsKey(key)) throw new IllegalArgumentException("Unknown UI screen: " + key);
+            if (!configured.get(key).isJsonObject()) {
+                throw new IllegalArgumentException("screens." + key + " must be an object");
+            }
+            JsonObject value = configured.getAsJsonObject(key);
+            ScreenCfg base = target.get(key);
+            int rows = value.has("rows") ? value.get("rows").getAsInt() : base.rows();
+            String title = strOrNull(value, "title");
+            target.put(key, new ScreenCfg(rows, title == null ? base.title() : title));
+        }
+    }
+
+    private static void validateScreens(Map<String, ScreenCfg> configured) {
+        for (Map.Entry<String, ScreenCfg> entry : configured.entrySet()) {
+            if (entry.getValue().rows() < 1 || entry.getValue().rows() > 6) {
+                throw new IllegalArgumentException("screens." + entry.getKey() + ".rows must be between 1 and 6");
+            }
+            if (entry.getValue().title() == null || entry.getValue().title().isBlank()) {
+                throw new IllegalArgumentException("screens." + entry.getKey() + ".title must not be empty");
+            }
+        }
+    }
+
+    private static void validateLayouts(Map<String, ? extends Map<String, List<Integer>>> configured,
+                                        Map<String, ScreenCfg> screenSettings) {
         for (Map.Entry<String, ? extends Map<String, List<Integer>>> screen : configured.entrySet()) {
+            int capacity = screenSettings.get(screen.getKey()).rows() * 9;
             Set<Integer> content = new java.util.HashSet<>();
             Set<Integer> controls = new java.util.HashSet<>();
             Integer emptySlot = null;
             for (Map.Entry<String, List<Integer>> entry : screen.getValue().entrySet()) {
                 List<Integer> values = entry.getValue();
                 boolean list = "content".equals(entry.getKey());
-                if (values.isEmpty() || (!list && values.size() != 1) || (list && values.size() > 45)) {
+                if ((!list && values.size() > 1) || (list && (values.isEmpty() || values.size() > capacity))) {
                     throw new IllegalArgumentException("Invalid UI slot count: " + screen.getKey() + "." + entry.getKey());
                 }
                 Set<Integer> local = new java.util.HashSet<>();
                 for (int slot : values) {
-                    if (slot < 0 || slot >= 54) {
-                        throw new IllegalArgumentException("UI slot outside 0..53: " + screen.getKey() + "." + entry.getKey());
+                    if (slot < 0 || slot >= capacity) {
+                        throw new IllegalArgumentException("UI slot outside 0.." + (capacity - 1) + ": "
+                                + screen.getKey() + "." + entry.getKey());
                     }
                     if (!local.add(slot)) {
                         throw new IllegalArgumentException("Duplicate UI slot " + slot + " in " + screen.getKey() + "." + entry.getKey());
@@ -777,6 +908,8 @@ public final class UiConfig {
             values.forEach((key, slots) -> {
                 if (slots.size() == 1 && !"content".equals(key)) {
                     object.addProperty(key, slots.get(0));
+                } else if (slots.isEmpty() && !"content".equals(key)) {
+                    object.add(key, com.google.gson.JsonNull.INSTANCE);
                 } else {
                     com.google.gson.JsonArray array = new com.google.gson.JsonArray();
                     slots.forEach(array::add);
