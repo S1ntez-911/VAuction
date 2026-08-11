@@ -46,27 +46,19 @@ final class MarketPalette {
         };
     }
 
-    /** Применяет секцию colors конфига (может быть null). Пропущенные цвета остаются прежними. */
-    static void apply(Map<String, String> colors) {
-        if (colors == null) return;
-        String v = colors.get("brand");
-        if (v != null) brand = parse(v);
-        v = colors.get("text");
-        if (v != null) text = parse(v);
-        v = colors.get("muted");
-        if (v != null) muted = parse(v);
-        v = colors.get("success");
-        if (v != null) success = parse(v);
-        v = colors.get("sell");
-        if (v != null) sell = parse(v);
-        v = colors.get("warning");
-        if (v != null) warning = parse(v);
-        v = colors.get("error");
-        if (v != null) error = parse(v);
-        v = colors.get("info");
-        if (v != null) info = parse(v);
-        v = colors.get("separator");
-        if (v != null) separator = parse(v);
+    /** Полностью заменяет палитру: отсутствующие значения возвращаются к стандартным. */
+    static void replace(Map<String, String> colors) {
+        Map<String, String> values = new java.util.HashMap<>(DEFAULT_COLORS);
+        if (colors != null) values.putAll(colors);
+        brand = parse(values.get("brand"));
+        text = parse(values.get("text"));
+        muted = parse(values.get("muted"));
+        success = parse(values.get("success"));
+        sell = parse(values.get("sell"));
+        warning = parse(values.get("warning"));
+        error = parse(values.get("error"));
+        info = parse(values.get("info"));
+        separator = parse(values.get("separator"));
     }
 
     private static TextColor parse(String hex) {

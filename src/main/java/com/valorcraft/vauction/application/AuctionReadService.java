@@ -83,14 +83,19 @@ public final class AuctionReadService {
     }
 
     public Page<MarketCard> markets(int requestedPage, String query) {
+        return markets(requestedPage, query, PAGE_SIZE);
+    }
+
+    public Page<MarketCard> markets(int requestedPage, String query, int requestedPageSize) {
+        int pageSize = Math.max(1, Math.min(PAGE_SIZE, requestedPageSize));
         long cutoff = System.currentTimeMillis() - RECENT_MARKET_MILLIS;
         List<List<String>> groups = SearchVocabulary.groups(query);
         long total = database.query(c -> markets.count(c, groups, cutoff));
         int totalPages = Math.max(1, (int) Math.min(Integer.MAX_VALUE,
-                (total + PAGE_SIZE - 1) / PAGE_SIZE));
+                (total + pageSize - 1) / pageSize));
         int page = Math.min(Math.max(0, requestedPage), totalPages - 1);
         List<MarketCard> rows = database.query(c -> markets.page(c, groups, cutoff,
-                page * PAGE_SIZE, PAGE_SIZE));
+                page * pageSize, pageSize));
         return new Page<>(rows, page, page > 0, page + 1 < totalPages, total, totalPages);
     }
 
@@ -187,10 +192,15 @@ public final class AuctionReadService {
     }
 
     public Page<PlayerMarketActivity> playerActivity(UUID playerId, int requestedPage) {
+        return playerActivity(playerId, requestedPage, PAGE_SIZE);
+    }
+
+    public Page<PlayerMarketActivity> playerActivity(UUID playerId, int requestedPage, int requestedPageSize) {
+        int pageSize = Math.max(1, Math.min(PAGE_SIZE, requestedPageSize));
         int page = Math.max(0, requestedPage);
         List<PlayerMarketActivity> rows = database.query(c -> activity.page(c, playerId,
-                page * PAGE_SIZE, PAGE_SIZE + 1));
-        return trim(rows, page);
+                page * pageSize, pageSize + 1));
+        return trim(rows, page, pageSize);
     }
 
     public ItemStack visual(ItemSnapshot snapshot) {
@@ -214,8 +224,12 @@ public final class AuctionReadService {
     }
 
     private static <T> Page<T> trim(List<T> rows, int page) {
-        boolean hasNext = rows.size() > PAGE_SIZE;
-        List<T> shown = hasNext ? new ArrayList<>(rows.subList(0, PAGE_SIZE)) : rows;
+        return trim(rows, page, PAGE_SIZE);
+    }
+
+    private static <T> Page<T> trim(List<T> rows, int page, int pageSize) {
+        boolean hasNext = rows.size() > pageSize;
+        List<T> shown = hasNext ? new ArrayList<>(rows.subList(0, pageSize)) : rows;
         return new Page<>(shown, page, page > 0, hasNext);
     }
 }

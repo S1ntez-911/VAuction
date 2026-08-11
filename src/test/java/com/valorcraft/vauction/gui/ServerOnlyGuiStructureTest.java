@@ -27,6 +27,10 @@ class ServerOnlyGuiStructureTest {
         assertTrue(commands.contains("Commands.literal(\"sell\")"));
         assertTrue(commands.contains("Commands.literal(\"buy\")"));
         assertTrue(commands.contains("ItemArgument.item(context)"));
+        assertTrue(commands.contains("Commands.literal(\"admin\")"));
+        assertTrue(commands.contains("Commands.literal(\"reloadui\")"));
+        assertTrue(commands.contains("source.hasPermission(2)"));
+        assertTrue(commands.contains("MarketController.instance().closeAll(source.getServer())"));
     }
 
     @Test
@@ -205,9 +209,8 @@ class ServerOnlyGuiStructureTest {
         String root = controller.substring(open, search);
         assertTrue(root.contains("renderMarkets(player, session)"));
         assertFalse(root.contains("renderHome"));
-        assertTrue(controller.contains("IntStream.range(0, 45)"));
-        assertTrue(controller.contains("NAV_PREVIOUS = 45"));
-        assertTrue(controller.contains("NAV_NEXT = 53"));
+        assertTrue(controller.contains("UiConfig.slots(layout, \"content\")"));
+        assertTrue(controller.contains("read().markets(s.cataloguePage, query, contentSlots.length)"));
         assertTrue(controller.contains("page.totalPages()"));
     }
 
@@ -247,16 +250,17 @@ class ServerOnlyGuiStructureTest {
     @Test
     void catalogueAndBottomRowsUseOneFixedSpatialGrammar() throws Exception {
         String controller = source("com/valorcraft/vauction/gui/MarketController.java");
-        assertTrue(controller.contains("NAV_PREVIOUS = 45"));
-        assertTrue(controller.contains("NAV_CATEGORIES = 46"));
-        assertTrue(controller.contains("NAV_SEARCH = 48"));
-        assertTrue(controller.contains("NAV_INFO = 49"));
-        assertTrue(controller.contains("NAV_MY = 50"));
-        assertTrue(controller.contains("NAV_NEXT = 53"));
-        assertTrue(controller.contains("TRADE_BACK = 45"));
-        assertTrue(controller.contains("TRADE_SECONDARY = 47"));
-        assertTrue(controller.contains("TRADE_PRIMARY = 49"));
-        assertTrue(controller.contains("PRICE_INFO = 31"));
+        String ui = source("com/valorcraft/vauction/gui/UiConfig.java");
+        assertTrue(ui.contains("layout(\"catalogue\""));
+        assertTrue(ui.contains("layout(\"search\""));
+        assertTrue(ui.contains("layout(\"categories\""));
+        assertTrue(ui.contains("layout(\"product\""));
+        assertTrue(ui.contains("layout(\"immediate\""));
+        assertTrue(ui.contains("layout(\"limit\""));
+        assertTrue(ui.contains("layout(\"my\""));
+        assertTrue(ui.contains("layout(\"manage\""));
+        assertTrue(controller.contains("CONFIRM_BACK = 45"));
+        assertTrue(controller.contains("CONFIRM_PRIMARY = 49"));
         assertFalse(controller.contains("PRICE_MINUS"), "percentage steppers are gone");
         assertFalse(controller.contains("PRICE_PLUS"));
         assertTrue(controller.contains("uiButton(buy ? \"buyNow\" : \"sellNow\""));
@@ -264,14 +268,11 @@ class ServerOnlyGuiStructureTest {
         assertTrue(controller.contains("uiButton(\"ownPrice\""), "mode switch on the immediate screen");
         assertFalse(controller.contains("uiButton(\"modeNow\""),
                 "the limit screen must not add a redundant mode switch");
-        assertTrue(controller.contains("put(box, s, NAV_INFO"));
-        assertTrue(controller.contains("MarketIcons.INFO_BOOK"), "info slot must not use raw materials");
+        assertTrue(controller.contains("UiConfig.slot(\"catalogue\", \"categories\")"));
+        assertTrue(controller.contains("UiConfig.button(\"infoBook\")"));
         assertTrue(controller.contains("uiButton(\"categories\""));
-        assertTrue(controller.contains("filterButton(box, s, 20, MarketFilter.ALL)"));
-        assertTrue(controller.contains("filterButton(box, s, 21, MarketFilter.RESOURCES)"));
-        assertTrue(controller.contains("filterButton(box, s, 22, MarketFilter.FOOD)"));
-        assertTrue(controller.contains("filterButton(box, s, 23, MarketFilter.TOOLS)"));
-        assertTrue(controller.contains("filterButton(box, s, 24, MarketFilter.MACHINES)"));
+        assertTrue(controller.contains("UiConfig.slot(\"categories\", \"all\")"));
+        assertTrue(controller.contains("UiConfig.slot(\"categories\", \"machines\")"));
     }
 
     @Test
@@ -297,13 +298,13 @@ class ServerOnlyGuiStructureTest {
         String buy = controller.substring(buyStart, elseStart);
         assertEquals(2, count(buy, "quantityPreset(box, s,"),
                 "BUY must offer exactly [1] [64]");
-        assertTrue(buy.contains("quantityPreset(box, s, 21, 1)"));
-        assertTrue(buy.contains("quantityPreset(box, s, 22, 64)"));
-        String sell = controller.substring(elseStart, controller.indexOf("put(box, s, 23, uiButton("));
+        assertTrue(buy.contains("UiConfig.slot(layout, \"quantityOne\")"));
+        assertTrue(buy.contains("UiConfig.slot(layout, \"quantityBulk\")"));
+        String sell = controller.substring(elseStart, controller.indexOf("UiConfig.slot(layout, \"quantityOther\")"));
         assertEquals(1, count(sell, "quantityPreset(box, s,"),
                 "SELL must offer exactly [1] [Всё]");
         assertTrue(controller.contains("UiConfig.text(\"quantity.all\""));
-        assertTrue(controller.contains("put(box, s, 23, uiButton(\"quantityOther\""));
+        assertTrue(controller.contains("UiConfig.slot(layout, \"quantityOther\")"));
         assertTrue(controller.contains("UiConfig.text(\"quantity.other\""));
         assertTrue(controller.contains("icon.setCount(Math.min(quantity, 64))"),
                 "presets must show their number on the item sprite");
@@ -375,7 +376,7 @@ class ServerOnlyGuiStructureTest {
         assertFalse(controller.contains("a.type() == GuiAction.Type.PAGE"));
         assertTrue(actions.contains("SET_QUANTITY"));
         assertTrue(actions.contains("SET_MAX_QUANTITY"));
-        assertTrue(controller.contains("quantityPreset(box, s, 22, 64)"));
+        assertTrue(controller.contains("UiConfig.slot(layout, \"quantityBulk\"), 64"));
         String all = between(controller, "private void setMaximumQuantity", "private void renderMarkets");
         assertTrue(all.contains("service().availableCount"), "ALL must read current server inventory on every click");
     }
@@ -388,8 +389,8 @@ class ServerOnlyGuiStructureTest {
         assertFalse(actions.contains("OPEN_MARKET"));
         assertFalse(controller.contains("button == 1 ? OrderSide.SELL : OrderSide.BUY"));
         assertTrue(controller.contains("private void renderProduct"));
-        assertTrue(controller.contains("PRODUCT_BUY"));
-        assertTrue(controller.contains("PRODUCT_SELL"));
+        assertTrue(controller.contains("UiConfig.slot(\"product\", \"buy\")"));
+        assertTrue(controller.contains("UiConfig.slot(\"product\", \"sell\")"));
         assertTrue(controller.contains("uiButton(\"productSellDisabled\""));
         assertFalse(controller.contains("private void renderMarket("));
         assertFalse(controller.contains("private static void levelItems("));
@@ -428,7 +429,7 @@ class ServerOnlyGuiStructureTest {
         assertTrue(editor.contains("\"editor.price\""));
         assertTrue(editor.contains("/ шт."));
         assertTrue(editor.contains("uiButton(\"priceInfo\""));
-        assertEquals(1, count(editor, "put(box, s, PRICE_INFO"),
+        assertEquals(1, count(editor, "UiConfig.slot(\"limit\", \"price\")"),
                 "price editing must be a single button, not a row of controls");
     }
 

@@ -10,6 +10,8 @@ import net.minecraft.network.chat.Component;
 import net.minecraft.resources.ResourceLocation;
 import net.minecraft.world.item.Item;
 import net.minecraft.world.item.Items;
+import org.apache.logging.log4j.LogManager;
+import org.apache.logging.log4j.Logger;
 
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
@@ -18,11 +20,13 @@ import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 
 /**
  * Поверхностный конфиг интерфейса биржи: цвета, тексты, строки лора, кнопки.
  * Файл {@code config/vauction-ui.json} правится без пересборки и применяется
- * командой {@code /ah ui reload}. Любая секция и любой ключ опциональны:
+ * командой {@code /ah admin reloadui} (старый {@code /ah ui reload} тоже работает).
+ * Любая секция и любой ключ опциональны:
  * недостающие значения берутся из встроенных русских значений по умолчанию.
  * <p>
  * Строки лора задаются токенами:
@@ -36,23 +40,38 @@ import java.util.Map;
  * </ul>
  */
 public final class UiConfig {
+    private static final Logger LOGGER = LogManager.getLogger("VAuction/UI");
+
     private UiConfig() {}
 
     /** Одна строка лора: метка может отсутствовать (тогда строка без «: »). */
     record LineValue(String labelKey, String text, String colorKey) {}
 
     /** Кнопка: иконка + ключи имени и подписи (nameKey может отсутствовать, имя задаётся кодом). */
-    record ButtonCfg(Item iconItem, String nameKey, String loreKey) {}
+    record ButtonCfg(Item iconItem, String nameKey, String loreKey,
+                     String name, List<String> lore, String colorKey, String loreColorKey) {
+        ButtonCfg(Item iconItem, String nameKey, String loreKey) {
+            this(iconItem, nameKey, loreKey, null, List.of(), "brand", "muted");
+        }
+
+        ButtonCfg {
+            lore = lore == null ? List.of() : List.copyOf(lore);
+            colorKey = colorKey == null || colorKey.isBlank() ? "brand" : colorKey;
+            loreColorKey = loreColorKey == null || loreColorKey.isBlank() ? "muted" : loreColorKey;
+        }
+    }
 
     private static volatile Path file;
 
     private static final LinkedHashMap<String, String> TEXTS = new LinkedHashMap<>();
     private static final LinkedHashMap<String, List<String>> LORE = new LinkedHashMap<>();
     private static final LinkedHashMap<String, ButtonCfg> BUTTONS = new LinkedHashMap<>();
+    private static final LinkedHashMap<String, LinkedHashMap<String, List<Integer>>> LAYOUTS = new LinkedHashMap<>();
 
     private static volatile LinkedHashMap<String, String> texts = new LinkedHashMap<>();
     private static volatile LinkedHashMap<String, List<String>> lore = new LinkedHashMap<>();
     private static volatile LinkedHashMap<String, ButtonCfg> buttons = new LinkedHashMap<>();
+    private static volatile LinkedHashMap<String, LinkedHashMap<String, List<Integer>>> layouts = new LinkedHashMap<>();
 
     static {
         TEXTS.put("brand", "◆ Биржа ValorCraft");
@@ -339,6 +358,39 @@ public final class UiConfig {
         BUTTONS.put("cancelYes", new ButtonCfg(Items.RED_CONCRETE, null, "button.cancelYesLore"));
         BUTTONS.put("warningChange", new ButtonCfg(Items.ARROW, "button.warningChange", "button.warningChangeLore"));
         BUTTONS.put("warningConfirm", new ButtonCfg(Items.YELLOW_CONCRETE, null, "button.warningConfirmLore"));
+        BUTTONS.put("categoriesHeader", new ButtonCfg(Items.BOOK, "filter.title", "filter.titleLore"));
+        BUTTONS.put("filterAll", new ButtonCfg(Items.CHEST, "filter.all", "filter.open"));
+        BUTTONS.put("filterResources", new ButtonCfg(Items.BARREL, "filter.resources", "filter.open"));
+        BUTTONS.put("filterFood", new ButtonCfg(Items.BOWL, "filter.food", "filter.open"));
+        BUTTONS.put("filterTools", new ButtonCfg(Items.ANVIL, "filter.tools", "filter.open"));
+        BUTTONS.put("filterMachines", new ButtonCfg(Items.PISTON, "filter.machines", "filter.open"));
+        BUTTONS.put("emptyCatalogue", new ButtonCfg(Items.PAPER, "empty.catalogTitle", "empty.createFirst"));
+        BUTTONS.put("emptySearch", new ButtonCfg(Items.COMPASS, "empty.searchTitle", "empty.searchBody"));
+        BUTTONS.put("emptyFilter", new ButtonCfg(Items.COMPASS, "empty.filterTitle", "empty.filterBody"));
+        BUTTONS.put("emptyMy", new ButtonCfg(Items.ENDER_CHEST, "my.emptyTitle", "my.emptyLine1"));
+    }
+
+    static {
+        layout("catalogue",
+                "content", range(0, 45), "empty", 22, "previous", 45,
+                "categories", 46, "search", 48, "info", 49, "my", 50, "next", 53);
+        layout("search",
+                "content", range(0, 45), "empty", 22, "previous", 45,
+                "newSearch", 48, "info", 49, "catalogue", 50, "next", 53);
+        layout("categories",
+                "header", 13, "all", 20, "resources", 21, "food", 22,
+                "tools", 23, "machines", 24, "back", 45);
+        layout("product", "item", 22, "back", 45, "buy", 48, "sell", 50);
+        layout("immediate",
+                "item", 13, "quantityOne", 21, "quantityBulk", 22, "quantityOther", 23,
+                "back", 45, "ownPrice", 47, "confirm", 49);
+        layout("limit",
+                "item", 13, "quantityOne", 21, "quantityBulk", 22, "quantityOther", 23,
+                "price", 31, "back", 45, "submit", 49);
+        layout("my",
+                "content", range(0, 45), "empty", 22, "previous", 45,
+                "info", 49, "catalogue", 50, "next", 53);
+        layout("manage", "item", 22, "back", 45, "cancel", 49);
     }
 
     /** Старт на загрузке сервера: задаём путь и применяем файл (или создаём дефолтный). */
@@ -357,27 +409,47 @@ public final class UiConfig {
             }
             JsonObject root = JsonParser.parseString(Files.readString(file, StandardCharsets.UTF_8))
                     .getAsJsonObject();
+            JsonObject defaults = JsonParser.parseString(defaultJson()).getAsJsonObject();
+            boolean upgraded = mergeMissing(root, defaults);
             LinkedHashMap<String, String> t = new LinkedHashMap<>(TEXTS);
             JsonObject jt = obj(root, "texts");
             if (jt != null) t.putAll(stringsOf(jt));
-            texts = t;
             LinkedHashMap<String, List<String>> l = new LinkedHashMap<>(LORE);
             JsonObject jl = obj(root, "lore");
             if (jl != null) l.putAll(loreOf(jl));
-            lore = l;
             LinkedHashMap<String, ButtonCfg> b = new LinkedHashMap<>(BUTTONS);
             JsonObject jb = obj(root, "buttons");
             if (jb != null) b.putAll(buttonsOf(jb));
+            validateButtons(b);
+            LinkedHashMap<String, LinkedHashMap<String, List<Integer>>> ly = copyLayouts(LAYOUTS);
+            JsonObject jLayouts = obj(root, "layouts");
+            if (jLayouts != null) applyLayouts(ly, jLayouts);
+            validateLayouts(ly);
+            LinkedHashMap<String, String> colors = stringsOf(obj(root, "colors"));
+            validateColors(colors);
+
+            // Publish one complete immutable-enough snapshot only after every section
+            // has parsed and validated. A bad reload leaves the previous UI active.
+            texts = t;
+            lore = l;
             buttons = b;
-            MarketPalette.apply(stringsOf(obj(root, "colors")));
+            layouts = ly;
+            MarketPalette.replace(colors);
+            if (upgraded) {
+                Files.writeString(file, new GsonBuilder().setPrettyPrinting().disableHtmlEscaping()
+                        .create().toJson(root), StandardCharsets.UTF_8);
+            }
             return null;
         } catch (Exception e) {
+            LOGGER.error("Cannot reload {}: {}", file, e.getMessage());
             return e.getMessage();
         }
     }
 
     private static String defaultJson() {
         JsonObject root = new JsonObject();
+        root.addProperty("format", 2);
+        root.addProperty("help", "Слоты сундука: 0..53. layouts меняет только расположение; названия действий менять нельзя.");
         JsonObject colors = new JsonObject();
         for (Map.Entry<String, String> e : MarketPalette.DEFAULT_COLORS.entrySet()) {
             colors.addProperty(e.getKey(), e.getValue());
@@ -397,11 +469,22 @@ public final class UiConfig {
         for (Map.Entry<String, ButtonCfg> e : BUTTONS.entrySet()) {
             JsonObject b = new JsonObject();
             b.addProperty("icon", BuiltInRegistries.ITEM.getKey(e.getValue().iconItem()).toString());
-            if (e.getValue().nameKey() != null) b.addProperty("nameKey", e.getValue().nameKey());
-            if (e.getValue().loreKey() != null) b.addProperty("loreKey", e.getValue().loreKey());
+            if (e.getValue().nameKey() != null) {
+                b.addProperty("nameKey", e.getValue().nameKey());
+                b.addProperty("name", TEXTS.getOrDefault(e.getValue().nameKey(), e.getValue().nameKey()));
+            }
+            if (e.getValue().loreKey() != null) {
+                b.addProperty("loreKey", e.getValue().loreKey());
+                com.google.gson.JsonArray directLore = new com.google.gson.JsonArray();
+                directLore.add(TEXTS.getOrDefault(e.getValue().loreKey(), e.getValue().loreKey()));
+                b.add("lore", directLore);
+            }
+            b.addProperty("color", e.getValue().colorKey());
+            b.addProperty("loreColor", e.getValue().loreColorKey());
             buttons.add(e.getKey(), b);
         }
         root.add("buttons", buttons);
+        root.add("layouts", layoutsJson(LAYOUTS));
         return new GsonBuilder().setPrettyPrinting().disableHtmlEscaping().create().toJson(root);
     }
 
@@ -429,15 +512,30 @@ public final class UiConfig {
         return cfg == null ? BUTTONS.getOrDefault(key, new ButtonCfg(Items.BARRIER, null, null)) : cfg;
     }
 
+    static int slot(String screen, String key) {
+        List<Integer> values = layoutValues(screen, key);
+        if (values.size() != 1) throw new IllegalStateException("UI slot is not scalar: " + screen + "." + key);
+        return values.get(0);
+    }
+
+    static int[] slots(String screen, String key) {
+        return layoutValues(screen, key).stream().mapToInt(Integer::intValue).toArray();
+    }
+
+    private static List<Integer> layoutValues(String screen, String key) {
+        LinkedHashMap<String, List<Integer>> current = layouts.get(screen);
+        if (current == null) current = LAYOUTS.get(screen);
+        List<Integer> values = current == null ? null : current.get(key);
+        if (values == null && LAYOUTS.containsKey(screen)) values = LAYOUTS.get(screen).get(key);
+        if (values == null) throw new IllegalArgumentException("Unknown UI layout key: " + screen + "." + key);
+        return values;
+    }
+
     private static Item itemOf(String id) {
-        try {
-            ResourceLocation loc = ResourceLocation.tryParse(id);
-            if (loc != null) {
-                return BuiltInRegistries.ITEM.getOptional(loc).orElse(Items.BARRIER);
-            }
-        } catch (RuntimeException ignored) {
-        }
-        return Items.BARRIER;
+        ResourceLocation loc = ResourceLocation.tryParse(id);
+        if (loc == null) throw new IllegalArgumentException("Invalid button item id: " + id);
+        return BuiltInRegistries.ITEM.getOptional(loc)
+                .orElseThrow(() -> new IllegalArgumentException("Unknown button item: " + id));
     }
 
     /**
@@ -480,9 +578,13 @@ public final class UiConfig {
 
     private static LinkedHashMap<String, String> stringsOf(JsonObject o) {
         LinkedHashMap<String, String> m = new LinkedHashMap<>();
+        if (o == null) return m;
         for (String k : o.keySet()) {
             JsonElement e = o.get(k);
-            if (e.isJsonPrimitive() && e.getAsJsonPrimitive().isString()) m.put(k, e.getAsString());
+            if (!e.isJsonPrimitive() || !e.getAsJsonPrimitive().isString()) {
+                throw new IllegalArgumentException("UI value must be a string: " + k);
+            }
+            m.put(k, e.getAsString());
         }
         return m;
     }
@@ -490,7 +592,9 @@ public final class UiConfig {
     private static LinkedHashMap<String, List<String>> loreOf(JsonObject o) {
         LinkedHashMap<String, List<String>> m = new LinkedHashMap<>();
         for (String k : o.keySet()) {
-            if (!o.get(k).isJsonArray()) continue;
+            if (!o.get(k).isJsonArray()) {
+                throw new IllegalArgumentException("UI lore must be an array: " + k);
+            }
             ArrayList<String> list = new ArrayList<>();
             for (JsonElement e : o.getAsJsonArray(k)) {
                 if (e.isJsonPrimitive() && e.getAsJsonPrimitive().isString()) list.add(e.getAsString());
@@ -503,7 +607,12 @@ public final class UiConfig {
     private static LinkedHashMap<String, ButtonCfg> buttonsOf(JsonObject o) {
         LinkedHashMap<String, ButtonCfg> m = new LinkedHashMap<>();
         for (String k : o.keySet()) {
-            if (!o.get(k).isJsonObject()) continue;
+            if (!o.get(k).isJsonObject()) {
+                throw new IllegalArgumentException("UI button must be an object: " + k);
+            }
+            if (!BUTTONS.containsKey(k)) {
+                throw new IllegalArgumentException("Unknown UI button: " + k);
+            }
             JsonObject b = o.getAsJsonObject(k);
             ButtonCfg base = BUTTONS.getOrDefault(k, new ButtonCfg(Items.BARRIER, null, null));
             Item icon = b.has("icon") && b.get("icon").isJsonPrimitive()
@@ -511,11 +620,186 @@ public final class UiConfig {
                     ? itemOf(b.get("icon").getAsString()) : base.iconItem();
             String nameKey = strOrNull(b, "nameKey");
             String loreKey = strOrNull(b, "loreKey");
+            String name = strOrNull(b, "name");
+            boolean hasDirectLore = b.has("lore");
+            List<String> directLore = stringArrayOrEmpty(b, "lore");
+            String color = strOrNull(b, "color");
+            String loreColor = strOrNull(b, "loreColor");
             m.put(k, new ButtonCfg(icon,
                     nameKey == null ? base.nameKey() : nameKey,
-                    loreKey == null ? base.loreKey() : loreKey));
+                    loreKey == null ? base.loreKey() : loreKey,
+                    name == null ? base.name() : name,
+                    hasDirectLore ? directLore : base.lore(),
+                    color == null ? base.colorKey() : color,
+                    loreColor == null ? base.loreColorKey() : loreColor));
         }
         return m;
+    }
+
+    private static List<String> stringArrayOrEmpty(JsonObject o, String key) {
+        if (!o.has(key) || !o.get(key).isJsonArray()) return List.of();
+        ArrayList<String> result = new ArrayList<>();
+        for (JsonElement element : o.getAsJsonArray(key)) {
+            if (!element.isJsonPrimitive() || !element.getAsJsonPrimitive().isString()) {
+                throw new IllegalArgumentException("buttons." + key + " must contain strings");
+            }
+            result.add(element.getAsString());
+        }
+        return result;
+    }
+
+    private static void layout(String screen, Object... pairs) {
+        LinkedHashMap<String, List<Integer>> values = new LinkedHashMap<>();
+        for (int i = 0; i + 1 < pairs.length; i += 2) {
+            String key = String.valueOf(pairs[i]);
+            Object value = pairs[i + 1];
+            if (value instanceof Integer integer) values.put(key, List.of(integer));
+            else if (value instanceof List<?> list) {
+                ArrayList<Integer> slots = new ArrayList<>();
+                for (Object entry : list) slots.add((Integer) entry);
+                values.put(key, List.copyOf(slots));
+            } else throw new IllegalArgumentException("Unsupported layout value " + value);
+        }
+        LAYOUTS.put(screen, values);
+    }
+
+    private static List<Integer> range(int startInclusive, int endExclusive) {
+        ArrayList<Integer> result = new ArrayList<>();
+        for (int i = startInclusive; i < endExclusive; i++) result.add(i);
+        return List.copyOf(result);
+    }
+
+    private static LinkedHashMap<String, LinkedHashMap<String, List<Integer>>> copyLayouts(
+            Map<String, ? extends Map<String, List<Integer>>> source) {
+        LinkedHashMap<String, LinkedHashMap<String, List<Integer>>> result = new LinkedHashMap<>();
+        source.forEach((screen, values) -> {
+            LinkedHashMap<String, List<Integer>> copy = new LinkedHashMap<>();
+            values.forEach((key, slots) -> copy.put(key, List.copyOf(slots)));
+            result.put(screen, copy);
+        });
+        return result;
+    }
+
+    private static void applyLayouts(LinkedHashMap<String, LinkedHashMap<String, List<Integer>>> target,
+                                     JsonObject configured) {
+        for (String screen : configured.keySet()) {
+            if (!target.containsKey(screen)) {
+                throw new IllegalArgumentException("Unknown UI screen in layouts: " + screen);
+            }
+            if (!configured.get(screen).isJsonObject()) {
+                throw new IllegalArgumentException("layouts." + screen + " must be an object");
+            }
+            JsonObject values = configured.getAsJsonObject(screen);
+            for (String key : values.keySet()) {
+                if (!target.get(screen).containsKey(key)) {
+                    throw new IllegalArgumentException("Unknown UI slot: " + screen + "." + key);
+                }
+                JsonElement element = values.get(key);
+                ArrayList<Integer> parsed = new ArrayList<>();
+                if (element.isJsonPrimitive() && element.getAsJsonPrimitive().isNumber()) {
+                    parsed.add(element.getAsInt());
+                } else if (element.isJsonArray()) {
+                    for (JsonElement slot : element.getAsJsonArray()) {
+                        if (!slot.isJsonPrimitive() || !slot.getAsJsonPrimitive().isNumber()) {
+                            throw new IllegalArgumentException("UI slot list must contain numbers: " + screen + "." + key);
+                        }
+                        parsed.add(slot.getAsInt());
+                    }
+                } else {
+                    throw new IllegalArgumentException("UI slot must be a number or array: " + screen + "." + key);
+                }
+                target.get(screen).put(key, List.copyOf(parsed));
+            }
+        }
+    }
+
+    private static void validateLayouts(Map<String, ? extends Map<String, List<Integer>>> configured) {
+        for (Map.Entry<String, ? extends Map<String, List<Integer>>> screen : configured.entrySet()) {
+            Set<Integer> content = new java.util.HashSet<>();
+            Set<Integer> controls = new java.util.HashSet<>();
+            Integer emptySlot = null;
+            for (Map.Entry<String, List<Integer>> entry : screen.getValue().entrySet()) {
+                List<Integer> values = entry.getValue();
+                boolean list = "content".equals(entry.getKey());
+                if (values.isEmpty() || (!list && values.size() != 1) || (list && values.size() > 45)) {
+                    throw new IllegalArgumentException("Invalid UI slot count: " + screen.getKey() + "." + entry.getKey());
+                }
+                Set<Integer> local = new java.util.HashSet<>();
+                for (int slot : values) {
+                    if (slot < 0 || slot >= 54) {
+                        throw new IllegalArgumentException("UI slot outside 0..53: " + screen.getKey() + "." + entry.getKey());
+                    }
+                    if (!local.add(slot)) {
+                        throw new IllegalArgumentException("Duplicate UI slot " + slot + " in " + screen.getKey() + "." + entry.getKey());
+                    }
+                    if (list) content.add(slot);
+                    else if ("empty".equals(entry.getKey())) emptySlot = slot;
+                    else if (!controls.add(slot)) throw new IllegalArgumentException(
+                            "UI slot " + slot + " is used twice on screen " + screen.getKey());
+                }
+            }
+            for (int control : controls) {
+                if (content.contains(control)) throw new IllegalArgumentException(
+                        "UI control slot " + control + " overlaps content on screen " + screen.getKey());
+            }
+            if (emptySlot != null && controls.contains(emptySlot)) throw new IllegalArgumentException(
+                    "UI empty-state slot " + emptySlot + " overlaps a control on screen " + screen.getKey());
+        }
+    }
+
+    private static void validateButtons(Map<String, ButtonCfg> configured) {
+        for (Map.Entry<String, ButtonCfg> entry : configured.entrySet()) {
+            ButtonCfg button = entry.getValue();
+            if (!MarketPalette.DEFAULT_COLORS.containsKey(button.colorKey())) {
+                throw new IllegalArgumentException("Unknown button color for " + entry.getKey() + ": " + button.colorKey());
+            }
+            if (!MarketPalette.DEFAULT_COLORS.containsKey(button.loreColorKey())) {
+                throw new IllegalArgumentException("Unknown button loreColor for " + entry.getKey() + ": " + button.loreColorKey());
+            }
+        }
+    }
+
+    private static void validateColors(Map<String, String> colors) {
+        for (Map.Entry<String, String> color : colors.entrySet()) {
+            if (!MarketPalette.DEFAULT_COLORS.containsKey(color.getKey())) {
+                throw new IllegalArgumentException("Unknown UI color: " + color.getKey());
+            }
+            if (!color.getValue().matches("#?[0-9a-fA-F]{6}")) {
+                throw new IllegalArgumentException("Invalid UI color " + color.getKey() + ": " + color.getValue());
+            }
+        }
+    }
+
+    private static JsonObject layoutsJson(Map<String, ? extends Map<String, List<Integer>>> source) {
+        JsonObject result = new JsonObject();
+        source.forEach((screen, values) -> {
+            JsonObject object = new JsonObject();
+            values.forEach((key, slots) -> {
+                if (slots.size() == 1 && !"content".equals(key)) {
+                    object.addProperty(key, slots.get(0));
+                } else {
+                    com.google.gson.JsonArray array = new com.google.gson.JsonArray();
+                    slots.forEach(array::add);
+                    object.add(key, array);
+                }
+            });
+            result.add(screen, object);
+        });
+        return result;
+    }
+
+    /** Recursively adds new default keys without overwriting administrator changes. */
+    private static boolean mergeMissing(JsonObject target, JsonObject defaults) {
+        boolean changed = false;
+        for (String key : defaults.keySet()) {
+            if (!target.has(key)) {
+                target.add(key, defaults.get(key).deepCopy());
+                changed = true;
+            } else if (target.get(key).isJsonObject() && defaults.get(key).isJsonObject()) {
+                changed |= mergeMissing(target.getAsJsonObject(key), defaults.getAsJsonObject(key));
+            }
+        }
+        return changed;
     }
 
     private static String strOrNull(JsonObject o, String key) {

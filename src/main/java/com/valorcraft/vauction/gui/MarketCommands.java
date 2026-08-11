@@ -91,6 +91,9 @@ final class MarketCommands {
                 .then(Commands.literal("ui")
                         .requires(source -> source.hasPermission(2))
                         .then(Commands.literal("reload").executes(ctx -> uiReload(ctx.getSource()))))
+                .then(Commands.literal("admin")
+                        .requires(source -> source.hasPermission(2))
+                        .then(Commands.literal("reloadui").executes(ctx -> uiReload(ctx.getSource()))))
                 .then(Commands.argument("unknown", StringArgumentType.greedyString())
                         .executes(ctx -> help(ctx.getSource())));
     }
@@ -101,7 +104,7 @@ final class MarketCommands {
         if (error != null) {
             return fail(source, UiConfig.fmt("ui.badJson", "error", error));
         }
-        MarketController.instance().clear();
+        MarketController.instance().closeAll(source.getServer());
         source.sendSuccess(() -> Component.literal(UiConfig.text("ui.reloaded"))
                 .withStyle(ChatFormatting.GREEN), false);
         return 1;
