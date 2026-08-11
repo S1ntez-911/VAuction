@@ -218,7 +218,7 @@ class ServerOnlyGuiStructureTest {
         assertTrue(controller.contains("GuiItems.marketDisplay(visual"));
         assertTrue(controller.contains("GuiAction.product(visual)"),
                 "the exact real stack must stay in the action, separate from its clean display card");
-        assertTrue(items.contains("new ItemStack(safeIcon)"));
+        assertTrue(items.contains("new ItemStack(realItem.getItem())"));
         assertTrue(items.contains("realItem.getHoverName().copy()"));
         assertFalse(controller.contains("GuiItems.decorateMarketItem(visual"),
                 "real TFG items add oversized chemical tooltips on the client");
@@ -248,9 +248,10 @@ class ServerOnlyGuiStructureTest {
     void catalogueAndBottomRowsUseOneFixedSpatialGrammar() throws Exception {
         String controller = source("com/valorcraft/vauction/gui/MarketController.java");
         assertTrue(controller.contains("NAV_PREVIOUS = 45"));
-        assertTrue(controller.contains("NAV_SEARCH = 51"));
+        assertTrue(controller.contains("NAV_CATEGORIES = 46"));
+        assertTrue(controller.contains("NAV_SEARCH = 48"));
         assertTrue(controller.contains("NAV_INFO = 49"));
-        assertTrue(controller.contains("NAV_MY = 52"));
+        assertTrue(controller.contains("NAV_MY = 50"));
         assertTrue(controller.contains("NAV_NEXT = 53"));
         assertTrue(controller.contains("TRADE_BACK = 45"));
         assertTrue(controller.contains("TRADE_SECONDARY = 47"));
@@ -265,10 +266,12 @@ class ServerOnlyGuiStructureTest {
                 "the limit screen must not add a redundant mode switch");
         assertTrue(controller.contains("put(box, s, NAV_INFO"));
         assertTrue(controller.contains("MarketIcons.INFO_BOOK"), "info slot must not use raw materials");
-        assertTrue(controller.contains("filterButton(box, s, 46, MarketFilter.RESOURCES)"));
-        assertTrue(controller.contains("filterButton(box, s, 47, MarketFilter.FOOD)"));
-        assertTrue(controller.contains("filterButton(box, s, 48, MarketFilter.TOOLS)"));
-        assertTrue(controller.contains("filterButton(box, s, 50, MarketFilter.MACHINES)"));
+        assertTrue(controller.contains("uiButton(\"categories\""));
+        assertTrue(controller.contains("filterButton(box, s, 20, MarketFilter.ALL)"));
+        assertTrue(controller.contains("filterButton(box, s, 21, MarketFilter.RESOURCES)"));
+        assertTrue(controller.contains("filterButton(box, s, 22, MarketFilter.FOOD)"));
+        assertTrue(controller.contains("filterButton(box, s, 23, MarketFilter.TOOLS)"));
+        assertTrue(controller.contains("filterButton(box, s, 24, MarketFilter.MACHINES)"));
     }
 
     @Test
@@ -277,8 +280,12 @@ class ServerOnlyGuiStructureTest {
         int openBox = controller.indexOf("private void openBox");
         String box = controller.substring(openBox);
         assertTrue(box.contains("player.openMenu"));
+        assertTrue(box.contains("UiConfig.text(\"window.title\")"),
+                "the reused vanilla menu must keep one stable, non-misleading title");
         assertTrue(box.contains("if (s.menu != null) fullSync(player, s.menu)"),
                 "fresh menu open must push full content immediately");
+        assertTrue(box.contains("player.getServer().execute"),
+                "fresh menu open must repeat the sync after Forge installs the container");
         assertTrue(controller.contains("private static void fullSync"));
     }
 

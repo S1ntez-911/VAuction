@@ -59,6 +59,7 @@ public final class UiConfig {
         TEXTS.put("window.title", "Биржа ValorCraft");
         TEXTS.put("window.catalogue", "Биржа: каталог");
         TEXTS.put("window.search", "Биржа: поиск");
+        TEXTS.put("window.categories", "Биржа: разделы");
         TEXTS.put("window.product", "Биржа: товар");
         TEXTS.put("window.buy", "Биржа: покупка");
         TEXTS.put("window.sell", "Биржа: продажа");
@@ -100,6 +101,8 @@ public final class UiConfig {
         TEXTS.put("filter.open", "Показать эту категорию");
         TEXTS.put("filter.active", "Категория выбрана");
         TEXTS.put("filter.reset", "Нажмите, чтобы показать всё");
+        TEXTS.put("filter.title", "Разделы каталога");
+        TEXTS.put("filter.titleLore", "Выберите, какие товары показать");
 
         TEXTS.put("instant.actionBuy", "ПОКУПКА");
         TEXTS.put("instant.actionSell", "ПРОДАЖА");
@@ -141,6 +144,8 @@ public final class UiConfig {
         TEXTS.put("button.my", "Моё");
         TEXTS.put("button.search", "Поиск");
         TEXTS.put("button.searchLore", "Искать по названию");
+        TEXTS.put("button.categories", "Разделы");
+        TEXTS.put("button.categoriesCurrent", "Сейчас: {category}");
         TEXTS.put("button.newSearch", "Новый поиск");
         TEXTS.put("button.newSearchLore", "Уточнить запрос");
         TEXTS.put("button.catalogue", "Каталог");
@@ -308,6 +313,7 @@ public final class UiConfig {
         BUTTONS.put("back", new ButtonCfg(Items.ARROW, "button.back", "button.backLore"));
         BUTTONS.put("my", new ButtonCfg(Items.ENDER_CHEST, "button.my", "nav.ordersHint"));
         BUTTONS.put("search", new ButtonCfg(Items.COMPASS, "button.search", "button.searchLore"));
+        BUTTONS.put("categories", new ButtonCfg(Items.BOOK, "button.categories", null));
         BUTTONS.put("newSearch", new ButtonCfg(Items.COMPASS, "button.newSearch", "button.newSearchLore"));
         BUTTONS.put("catalogue", new ButtonCfg(Items.CHEST, "button.catalogue", "button.catalogueLore"));
         BUTTONS.put("allGoods", new ButtonCfg(Items.CHEST, "button.allGoods", "button.allGoodsLore"));

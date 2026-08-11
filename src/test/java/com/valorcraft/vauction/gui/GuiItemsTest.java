@@ -76,12 +76,13 @@ class GuiItemsTest {
         real.setHoverName(Component.literal("Светокамень"));
         real.getOrCreateTag().putString("ChemicalFormula", "oversized-client-tooltip");
 
-        ItemStack display = GuiItems.marketDisplay(real, Items.ITEM_FRAME,
+        ItemStack display = GuiItems.marketDisplay(real,
                 List.of(Component.literal("Купить сейчас: 5.0")));
 
-        assertEquals(Items.ITEM_FRAME, display.getItem());
+        assertEquals(Items.GLOWSTONE, display.getItem());
         assertEquals("Светокамень", display.getHoverName().getString());
         assertTrue(display.getTag() == null || !display.getTag().contains("ChemicalFormula"));
+        assertEquals(127, display.getTag().getInt("HideFlags"));
         assertEquals("oversized-client-tooltip", real.getTag().getString("ChemicalFormula"));
     }
 }

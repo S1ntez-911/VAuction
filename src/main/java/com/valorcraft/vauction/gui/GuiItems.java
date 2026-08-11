@@ -6,7 +6,6 @@ import net.minecraft.nbt.ListTag;
 import net.minecraft.nbt.StringTag;
 import net.minecraft.network.chat.Component;
 import net.minecraft.world.item.ItemStack;
-import net.minecraft.world.item.Item;
 
 import java.util.List;
 
@@ -54,16 +53,20 @@ final class GuiItems {
     }
 
     /**
-     * Server-only safe market card. TFG/GT clients append large chemical formulae to
-     * real material stacks after the server has built their lore; a neutral vanilla
-     * icon is therefore the only reliable way to keep the auction tooltip readable.
-     * The real stack remains in GuiAction/MarketSession and is never replaced in the
-     * order identity or delivery path.
+     * Builds a recognizable display copy of the real item while dropping its NBT.
+     * TFG/GT clients derive oversized chemical tooltips from that NBT, so the GUI
+     * keeps only the item type and visible name. The exact stack remains in
+     * GuiAction/MarketSession and is never replaced in order identity or delivery.
      */
-    static ItemStack marketDisplay(ItemStack realItem, Item safeIcon, List<Component> marketLines) {
+    static ItemStack marketDisplay(ItemStack realItem, List<Component> marketLines) {
         Component name = realItem == null || realItem.isEmpty()
                 ? Component.literal("Неизвестный предмет") : realItem.getHoverName().copy();
-        return namedButton(new ItemStack(safeIcon), name, marketLines);
+        ItemStack visual = realItem == null || realItem.isEmpty()
+                ? ItemStack.EMPTY : new ItemStack(realItem.getItem());
+        if (visual.isEmpty()) return visual;
+        visual.setHoverName(name);
+        visual.getOrCreateTag().putInt("HideFlags", 127);
+        return namedButton(visual, name, marketLines);
     }
 
     static void setLore(ItemStack stack, List<String> lines) {
