@@ -98,7 +98,7 @@ final class MarketCommands {
                         .executes(ctx -> help(ctx.getSource())));
     }
 
-    /** Перечитывает config/VMods/VAuction/vauction-ui.json и переоткрывает сессии (только оп). */
+    /** Перечитывает config/VMods/VAuction/ui/*.json и переоткрывает сессии (только оп). */
     private static int uiReload(CommandSourceStack source) {
         String error = UiConfig.reload();
         if (error != null) {

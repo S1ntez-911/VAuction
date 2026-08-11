@@ -31,32 +31,46 @@ class UiConfigTest {
     @TempDir
     Path temp;
 
-    private Path uiFile() {
-        return temp.resolve("VMods").resolve("VAuction").resolve("vauction-ui.json");
+    private Path uiFile(String name) {
+        return temp.resolve("VMods").resolve("VAuction").resolve("ui").resolve(name);
+    }
+
+    private JsonObject read(String name) throws Exception {
+        return JsonParser.parseString(Files.readString(uiFile(name), StandardCharsets.UTF_8)).getAsJsonObject();
+    }
+
+    private void write(String name, JsonObject value) throws Exception {
+        Files.writeString(uiFile(name), value.toString(), StandardCharsets.UTF_8);
     }
 
     @Test
     void generatedConfigExposesButtonsAndEveryEditableScreenLayout() throws Exception {
         UiConfig.start(temp);
-        Path file = uiFile();
-        JsonObject root = JsonParser.parseString(Files.readString(file, StandardCharsets.UTF_8))
-                .getAsJsonObject();
+        JsonObject screenFile = read("screens.json");
+        JsonObject buttonFile = read("buttons.json");
+        JsonObject decorationFile = read("decorations.json");
 
-        assertEquals(4, root.get("format").getAsInt());
-        assertTrue(root.has("placeholderHelp"));
-        assertTrue(root.getAsJsonObject("placeholderHelp").getAsJsonObject("screens")
+        assertEquals(1, screenFile.get("format").getAsInt());
+        assertTrue(screenFile.has("placeholderHelp"));
+        assertTrue(screenFile.getAsJsonObject("placeholderHelp").getAsJsonObject("screens")
                 .getAsJsonObject("product").has("buy_price"));
-        assertTrue(root.getAsJsonObject("decorations").getAsJsonObject("product")
+        assertTrue(decorationFile.getAsJsonObject("decorations").getAsJsonObject("product")
                 .getAsJsonObject("background").has("fillEmpty"));
-        assertTrue(root.getAsJsonObject("buttons").getAsJsonObject("back").has("name"));
-        assertTrue(root.getAsJsonObject("buttons").getAsJsonObject("back").has("lore"));
-        JsonObject layouts = root.getAsJsonObject("layouts");
+        assertTrue(buttonFile.getAsJsonObject("buttons").getAsJsonObject("back").has("name"));
+        assertTrue(buttonFile.getAsJsonObject("buttons").getAsJsonObject("back").has("lore"));
+        JsonObject layouts = screenFile.getAsJsonObject("layouts");
         for (String screen : new String[]{"catalogue", "search", "categories", "product",
                 "immediate", "limit", "my", "manage"}) {
             assertTrue(layouts.has(screen), "missing editable layout " + screen);
-            assertEquals(6, root.getAsJsonObject("screens").getAsJsonObject(screen).get("rows").getAsInt());
+            assertEquals(6, screenFile.getAsJsonObject("screens").getAsJsonObject(screen).get("rows").getAsInt());
         }
         assertTrue(layouts.getAsJsonObject("catalogue").get("content").isJsonArray());
+        assertTrue(Files.readString(uiFile("README.txt"), StandardCharsets.UTF_8).contains("КАРТА СЛОТОВ"));
+        for (String name : new String[]{"screens.json", "buttons.json", "decorations.json",
+                "texts.json", "cards.json", "colors.json"}) {
+            assertTrue(Files.isRegularFile(uiFile(name)), "missing split UI config " + name);
+        }
+        assertFalse(Files.exists(temp.resolve("VMods").resolve("VAuction").resolve("vauction-ui.json")));
     }
 
     @Test
@@ -66,34 +80,31 @@ class UiConfigTest {
 
         UiConfig.start(temp);
 
-        Path file = uiFile();
-        JsonObject upgraded = JsonParser.parseString(Files.readString(file, StandardCharsets.UTF_8))
-                .getAsJsonObject();
-        assertEquals(4, upgraded.get("format").getAsInt());
+        JsonObject upgradedTexts = read("texts.json");
         assertFalse(Files.exists(legacy));
-        assertEquals("Моя биржа", upgraded.getAsJsonObject("texts").get("brand").getAsString());
-        assertTrue(upgraded.has("layouts"));
-        assertTrue(upgraded.has("screens"));
-        assertTrue(upgraded.has("placeholderHelp"));
-        assertTrue(upgraded.getAsJsonObject("buttons").has("productBuy"));
+        assertTrue(Files.exists(temp.resolve("VMods").resolve("VAuction").resolve("vauction-ui.legacy.json")));
+        assertEquals("Моя биржа", upgradedTexts.getAsJsonObject("texts").get("brand").getAsString());
+        assertTrue(read("screens.json").has("layouts"));
+        assertTrue(read("screens.json").has("placeholderHelp"));
+        assertTrue(read("buttons.json").getAsJsonObject("buttons").has("productBuy"));
     }
 
     @Test
     void reloadAppliesSlotsButtonTextLoreAndIcon() throws Exception {
         UiConfig.start(temp);
-        Path file = uiFile();
-        JsonObject root = JsonParser.parseString(Files.readString(file, StandardCharsets.UTF_8))
-                .getAsJsonObject();
-        JsonObject product = root.getAsJsonObject("layouts").getAsJsonObject("product");
+        JsonObject screenFile = read("screens.json");
+        JsonObject buttonFile = read("buttons.json");
+        JsonObject product = screenFile.getAsJsonObject("layouts").getAsJsonObject("product");
         product.addProperty("item", 13);
         product.addProperty("back", 12);
         product.addProperty("buy", 10);
         product.addProperty("sell", 11);
-        JsonObject back = root.getAsJsonObject("buttons").getAsJsonObject("back");
+        JsonObject back = buttonFile.getAsJsonObject("buttons").getAsJsonObject("back");
         back.addProperty("icon", "minecraft:oak_door");
         back.addProperty("name", "Вернуться");
         back.getAsJsonArray("lore").set(0, new com.google.gson.JsonPrimitive("На предыдущий экран"));
-        Files.writeString(file, root.toString(), StandardCharsets.UTF_8);
+        write("screens.json", screenFile);
+        write("buttons.json", buttonFile);
 
         assertNull(UiConfig.reload());
         assertEquals(10, UiConfig.slot("product", "buy"));
@@ -106,18 +117,16 @@ class UiConfigTest {
     @Test
     void badReloadKeepsLastKnownGoodLayout() throws Exception {
         UiConfig.start(temp);
-        Path file = uiFile();
-        JsonObject root = JsonParser.parseString(Files.readString(file, StandardCharsets.UTF_8))
-                .getAsJsonObject();
+        JsonObject root = read("screens.json");
         JsonObject product = root.getAsJsonObject("layouts").getAsJsonObject("product");
         product.addProperty("buy", 10);
         product.addProperty("sell", 11);
-        Files.writeString(file, root.toString(), StandardCharsets.UTF_8);
+        write("screens.json", root);
         assertNull(UiConfig.reload());
 
         product.addProperty("buy", 48);
         product.addProperty("sell", 48);
-        Files.writeString(file, root.toString(), StandardCharsets.UTF_8);
+        write("screens.json", root);
 
         String error = UiConfig.reload();
         assertNotNull(error);
@@ -129,9 +138,7 @@ class UiConfigTest {
     @Test
     void rowsTitlesHiddenSlotsAndPlaceholdersAreConfigurable() throws Exception {
         UiConfig.start(temp);
-        Path file = uiFile();
-        JsonObject root = JsonParser.parseString(Files.readString(file, StandardCharsets.UTF_8))
-                .getAsJsonObject();
+        JsonObject root = read("screens.json");
         JsonObject screens = root.getAsJsonObject("screens");
         screens.getAsJsonObject("product").addProperty("rows", 3);
         screens.getAsJsonObject("product").addProperty("title", "{item}: {buy_price}");
@@ -140,7 +147,7 @@ class UiConfigTest {
         product.addProperty("back", 18);
         product.addProperty("buy", 21);
         product.add("sell", com.google.gson.JsonNull.INSTANCE);
-        Files.writeString(file, root.toString(), StandardCharsets.UTF_8);
+        write("screens.json", root);
 
         assertNull(UiConfig.reload());
         assertEquals(3, UiConfig.rows("product"));
@@ -154,11 +161,9 @@ class UiConfigTest {
     @Test
     void rowReductionRejectsSlotsOutsideNewCapacityAndKeepsPreviousSnapshot() throws Exception {
         UiConfig.start(temp);
-        Path file = uiFile();
-        JsonObject root = JsonParser.parseString(Files.readString(file, StandardCharsets.UTF_8))
-                .getAsJsonObject();
+        JsonObject root = read("screens.json");
         root.getAsJsonObject("screens").getAsJsonObject("product").addProperty("rows", 3);
-        Files.writeString(file, root.toString(), StandardCharsets.UTF_8);
+        write("screens.json", root);
 
         String error = UiConfig.reload();
         assertNotNull(error);
@@ -170,9 +175,7 @@ class UiConfigTest {
     @Test
     void decorationsFillOnlyEmptySlotsAndResolveScreenPlaceholders() throws Exception {
         UiConfig.start(temp);
-        Path file = uiFile();
-        JsonObject root = JsonParser.parseString(Files.readString(file, StandardCharsets.UTF_8))
-                .getAsJsonObject();
+        JsonObject root = read("decorations.json");
         JsonObject productDecorations = root.getAsJsonObject("decorations").getAsJsonObject("product");
         JsonObject accent = productDecorations.getAsJsonObject("background").deepCopy();
         accent.addProperty("enabled", true);
@@ -187,7 +190,7 @@ class UiConfigTest {
         lore.add("Покупка: {buy_price}");
         accent.add("lore", lore);
         productDecorations.add("accent", accent);
-        Files.writeString(file, root.toString(), StandardCharsets.UTF_8);
+        write("decorations.json", root);
 
         assertNull(UiConfig.reload());
         net.minecraft.world.SimpleContainer box = new net.minecraft.world.SimpleContainer(54);
@@ -202,11 +205,9 @@ class UiConfigTest {
     @Test
     void unavailableScreenPlaceholderRejectsReload() throws Exception {
         UiConfig.start(temp);
-        Path file = uiFile();
-        JsonObject root = JsonParser.parseString(Files.readString(file, StandardCharsets.UTF_8))
-                .getAsJsonObject();
+        JsonObject root = read("screens.json");
         root.getAsJsonObject("screens").getAsJsonObject("product").addProperty("title", "{price}");
-        Files.writeString(file, root.toString(), StandardCharsets.UTF_8);
+        write("screens.json", root);
 
         String error = UiConfig.reload();
         assertNotNull(error);

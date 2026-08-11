@@ -27,7 +27,7 @@ import java.util.Set;
 
 /**
  * Поверхностный конфиг интерфейса биржи: цвета, тексты, строки лора, кнопки.
- * Файл {@code config/VMods/VAuction/vauction-ui.json} правится без пересборки и применяется
+ * Файлы {@code config/VMods/VAuction/ui/*.json} правятся без пересборки и применяются
  * командой {@code /ah admin reloadui} (старый {@code /ah ui reload} тоже работает).
  * Любая секция и любой ключ опциональны:
  * недостающие значения берутся из встроенных русских значений по умолчанию.
@@ -77,7 +77,10 @@ public final class UiConfig {
         }
     }
 
-    private static volatile Path file;
+    private static volatile Path directory;
+    private static volatile Path legacyFile;
+
+    private static final LinkedHashMap<String, List<String>> UI_FILES = new LinkedHashMap<>();
 
     private static final LinkedHashMap<String, String> TEXTS = new LinkedHashMap<>();
     private static final LinkedHashMap<String, List<String>> LORE = new LinkedHashMap<>();
@@ -96,6 +99,13 @@ public final class UiConfig {
     private static volatile LinkedHashMap<String, LinkedHashMap<String, DecorationCfg>> decorations = new LinkedHashMap<>();
 
     static {
+        UI_FILES.put("screens.json", List.of("placeholderHelp", "screens", "layouts"));
+        UI_FILES.put("buttons.json", List.of("buttons"));
+        UI_FILES.put("decorations.json", List.of("decorations"));
+        UI_FILES.put("texts.json", List.of("texts"));
+        UI_FILES.put("cards.json", List.of("lore"));
+        UI_FILES.put("colors.json", List.of("colors"));
+
         PLACEHOLDER_HELP.put("player", "Имя игрока");
         PLACEHOLDER_HELP.put("screen", "Ключ текущего экрана");
         PLACEHOLDER_HELP.put("item", "Название выбранного предмета");
@@ -462,10 +472,12 @@ public final class UiConfig {
         layout("manage", "item", 22, "back", 45, "cancel", 49);
     }
 
-    /** Старт на загрузке сервера: задаём путь и применяем файл (или создаём дефолтный). */
+    /** Старт на загрузке сервера: задаём каталог и применяем файлы (или создаём дефолтные). */
     public static void start(Path configDir) {
         try {
-            file = VAuctionConfigPaths.file(configDir, "vauction-ui.json");
+            Path root = VAuctionConfigPaths.directory(configDir);
+            directory = root.resolve("ui");
+            legacyFile = VAuctionConfigPaths.file(configDir, "vauction-ui.json");
             reload();
         } catch (java.io.IOException e) {
             throw new IllegalStateException("Cannot prepare config/VMods/VAuction", e);
@@ -474,25 +486,12 @@ public final class UiConfig {
 
     /** Применяет файл конфига. Возвращает null при успехе или текст ошибки. */
     static String reload() {
-        if (file == null) return "ui config: file is not initialised";
+        if (directory == null) return "ui config: directory is not initialised";
         try {
-            if (!Files.exists(file)) {
-                Files.createDirectories(file.getParent());
-                Files.writeString(file, defaultJson(), StandardCharsets.UTF_8);
-            }
-            JsonObject root = JsonParser.parseString(Files.readString(file, StandardCharsets.UTF_8))
-                    .getAsJsonObject();
             JsonObject defaults = JsonParser.parseString(defaultJson()).getAsJsonObject();
-            boolean upgraded = mergeMissing(root, defaults);
-            if (!root.has("format") || !root.get("format").isJsonPrimitive()
-                    || !root.getAsJsonPrimitive("format").isNumber()
-                    || root.get("format").getAsInt() < 4) {
-                root.addProperty("format", 4);
-                // Help is generated documentation, not an owner setting. Replace the old
-                // flat list so upgraded files show the exact per-screen reference.
-                root.add("placeholderHelp", defaults.get("placeholderHelp").deepCopy());
-                upgraded = true;
-            }
+            Files.createDirectories(directory);
+            migrateMonolithicConfig(defaults);
+            JsonObject root = readSplitConfig(defaults);
             LinkedHashMap<String, String> t = new LinkedHashMap<>(TEXTS);
             JsonObject jt = obj(root, "texts");
             if (jt != null) t.putAll(stringsOf(jt));
@@ -528,20 +527,160 @@ public final class UiConfig {
             layouts = ly;
             decorations = dc;
             MarketPalette.replace(colors);
-            if (upgraded) {
-                Files.writeString(file, new GsonBuilder().setPrettyPrinting().disableHtmlEscaping()
-                        .create().toJson(root), StandardCharsets.UTF_8);
-            }
+            Files.writeString(directory.resolve("README.txt"), readme(), StandardCharsets.UTF_8);
             return null;
         } catch (Exception e) {
-            LOGGER.error("Cannot reload {}: {}", file, e.getMessage());
+            LOGGER.error("Cannot reload {}: {}", directory, e.getMessage());
             return e.getMessage();
         }
     }
 
+    private static void migrateMonolithicConfig(JsonObject defaults) throws java.io.IOException {
+        boolean hasSplitFile = UI_FILES.keySet().stream().anyMatch(name -> Files.exists(directory.resolve(name)));
+        if (hasSplitFile || legacyFile == null || !Files.isRegularFile(legacyFile)) return;
+
+        JsonObject legacy = JsonParser.parseString(Files.readString(legacyFile, StandardCharsets.UTF_8))
+                .getAsJsonObject();
+        mergeMissing(legacy, defaults);
+        legacy.addProperty("format", 5);
+        legacy.add("placeholderHelp", defaults.get("placeholderHelp").deepCopy());
+        writeSplitConfig(legacy);
+
+        Path backup = legacyFile.resolveSibling("vauction-ui.legacy.json");
+        if (Files.exists(backup)) {
+            backup = legacyFile.resolveSibling("vauction-ui.legacy-" + System.currentTimeMillis() + ".json");
+        }
+        Files.move(legacyFile, backup);
+    }
+
+    private static JsonObject readSplitConfig(JsonObject defaults) throws java.io.IOException {
+        JsonObject root = new JsonObject();
+        root.addProperty("format", 5);
+        for (Map.Entry<String, List<String>> entry : UI_FILES.entrySet()) {
+            Path path = directory.resolve(entry.getKey());
+            JsonObject defaultDocument = splitDocument(defaults, entry.getKey(), entry.getValue());
+            JsonObject document;
+            boolean upgraded = false;
+            if (!Files.exists(path)) {
+                document = defaultDocument;
+                upgraded = true;
+            } else {
+                JsonElement parsed = JsonParser.parseString(Files.readString(path, StandardCharsets.UTF_8));
+                if (!parsed.isJsonObject()) throw new IllegalArgumentException(entry.getKey() + " must contain an object");
+                document = parsed.getAsJsonObject();
+                upgraded = mergeMissing(document, defaultDocument);
+            }
+            if (!document.has("format") || !document.get("format").isJsonPrimitive()
+                    || !document.getAsJsonPrimitive("format").isNumber()
+                    || document.get("format").getAsInt() < 1) {
+                document.addProperty("format", 1);
+                upgraded = true;
+            }
+            for (String section : entry.getValue()) {
+                if (!document.has(section) || !document.get(section).isJsonObject()) {
+                    throw new IllegalArgumentException(entry.getKey() + ": section " + section + " must be an object");
+                }
+                root.add(section, document.get(section).deepCopy());
+            }
+            if (upgraded) writeJson(path, document);
+        }
+        return root;
+    }
+
+    private static void writeSplitConfig(JsonObject root) throws java.io.IOException {
+        Files.createDirectories(directory);
+        for (Map.Entry<String, List<String>> entry : UI_FILES.entrySet()) {
+            writeJson(directory.resolve(entry.getKey()), splitDocument(root, entry.getKey(), entry.getValue()));
+        }
+    }
+
+    private static JsonObject splitDocument(JsonObject root, String fileName, List<String> sections) {
+        JsonObject document = new JsonObject();
+        document.addProperty("format", 1);
+        document.addProperty("help", switch (fileName) {
+            case "screens.json" -> "Размеры экранов и расположение элементов. Слоты идут слева направо, сверху вниз, начиная с 0.";
+            case "buttons.json" -> "Внешний вид функциональных кнопок. Их действия этим файлом не меняются.";
+            case "decorations.json" -> "Некликабельный фон и украшения. Можно добавлять любые именованные элементы.";
+            case "texts.json" -> "Фразы интерфейса. Ключи удалять не обязательно: отсутствующие дополняются автоматически.";
+            case "cards.json" -> "Порядок строк в подсказках карточек предметов и заявок.";
+            case "colors.json" -> "Именованные RGB-цвета интерфейса в формате #RRGGBB.";
+            default -> "VAuction UI configuration.";
+        });
+        for (String section : sections) {
+            JsonElement value = root.get(section);
+            if (value == null || !value.isJsonObject()) {
+                throw new IllegalArgumentException("Missing UI section " + section + " for " + fileName);
+            }
+            document.add(section, value.deepCopy());
+        }
+        return document;
+    }
+
+    private static void writeJson(Path path, JsonObject value) throws java.io.IOException {
+        Files.createDirectories(path.getParent());
+        Files.writeString(path, new GsonBuilder().setPrettyPrinting().disableHtmlEscaping()
+                .create().toJson(value), StandardCharsets.UTF_8);
+    }
+
+    private static String readme() {
+        return """
+                VAuction GUI
+                =============
+
+                После изменений выполните: /ah admin reloadui
+                При ошибке новые настройки не применятся, предыдущий интерфейс продолжит работать.
+
+                ФАЙЛЫ
+                screens.json      размеры экранов, заголовки и расположение функциональных элементов
+                buttons.json      иконки, названия, описания и цвета кнопок
+                decorations.json  фон, рамки и другие некликабельные элементы
+                texts.json        все фразы интерфейса
+                cards.json        состав и порядок строк в карточках предметов и заявок
+                colors.json       палитра цветов
+
+                КАРТА СЛОТОВ
+                 0  1  2  3  4  5  6  7  8
+                 9 10 11 12 13 14 15 16 17
+                18 19 20 21 22 23 24 25 26
+                27 28 29 30 31 32 33 34 35
+                36 37 38 39 40 41 42 43 44
+                45 46 47 48 49 50 51 52 53
+
+                screens.rows: от 1 до 6. Ширина всегда 9.
+                В layouts укажите номер слота. null скрывает одиночный элемент.
+                content — список товарных слотов; его длина задаёт число товаров на странице.
+
+                ПРИМЕР ЭКРАНА НА 3 РЯДА (screens.json)
+                "product": { "rows": 3, "title": "Биржа: {item}" }
+                "product": { "item": 13, "back": 18, "buy": 21, "sell": 23 }
+
+                ПРИМЕР ФОНА (decorations.json)
+                "background": {
+                  "enabled": true,
+                  "fillEmpty": true,
+                  "slots": [],
+                  "icon": "minecraft:gray_stained_glass_pane",
+                  "count": 1,
+                  "name": " ",
+                  "lore": [],
+                  "color": "muted",
+                  "loreColor": "muted"
+                }
+
+                fillEmpty=true заполняет только реально пустые ячейки и не перекрывает товары и кнопки.
+                Для отдельных ячеек используйте fillEmpty=false и, например, "slots": [0, 1, 7, 8].
+                В decorations можно создавать сколько угодно элементов с произвольными именами.
+
+                Доступные плейсхолдеры перечислены отдельно для каждого экрана
+                в placeholderHelp внутри screens.json.
+                Неизвестный или недоступный для заголовка/декорации плейсхолдер остановит reload
+                и покажет точный путь ошибки.
+                """;
+    }
+
     private static String defaultJson() {
         JsonObject root = new JsonObject();
-        root.addProperty("format", 4);
+        root.addProperty("format", 5);
         root.addProperty("help", "Ширина всегда 9. screens.rows задаёт 1..6 рядов. layouts: число ставит элемент в слот, null скрывает. decorations добавляет некликабельные элементы и заполнители. Действия кнопок неизменны.");
         JsonObject placeholderHelp = new JsonObject();
         JsonObject commonPlaceholders = new JsonObject();
