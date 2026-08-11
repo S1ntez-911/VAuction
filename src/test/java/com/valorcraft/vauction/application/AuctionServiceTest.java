@@ -1004,6 +1004,64 @@ class AuctionServiceTest {
     }
 
     @Test
+    void buyReserveReasonIsHumanReadableNotTechnical() {
+        UUID buyer = UUID.randomUUID();
+        economy.balances.put(buyer, 10_000L);
+        ItemStack iron = new ItemStack(Items.IRON_INGOT, 1);
+        String expectedName = iron.getHoverName().getString();
+        economy.reasons.clear();
+
+        service.createBuyOrder(buyer, iron, 33, 5);
+
+        assertEquals(1, economy.reasons.size());
+        assertEquals("Заявка на покупку: " + expectedName, economy.reasons.get(0));
+        assertFalse(economy.reasons.get(0).contains(buyer.toString()),
+                "player UUID must not leak into the visible reason");
+        assertFalse(economy.reasons.get(0).contains("ESCROW"));
+        assertFalse(economy.reasons.get(0).contains("reserve"));
+        assertFalse(economy.reasons.get(0).contains("minecraft:"),
+                "registry id must not appear in the visible reason");
+    }
+
+    @Test
+    void cancelBuyReleaseReasonIsHumanReadable() {
+        UUID buyer = UUID.randomUUID();
+        economy.balances.put(buyer, 1_000L);
+        ItemStack iron = new ItemStack(Items.IRON_INGOT, 1);
+        String expectedName = iron.getHoverName().getString();
+        AuctionService.Outcome created = service.createBuyOrder(buyer, iron, 10, 10);
+        economy.reasons.clear();
+
+        assertEquals(AuctionService.Result.SUCCESS,
+                service.cancel(buyer, created.order().orderId(), "test").status());
+
+        assertEquals(1, economy.reasons.size());
+        assertEquals("Возврат заявки: " + expectedName, economy.reasons.get(0));
+        assertFalse(economy.reasons.get(0).contains(created.order().orderId().toString()),
+                "internal order id must not leak into the visible reason");
+    }
+
+    @Test
+    void settlementReasonIsHumanReadableAndCoversSellerAndBuyer() {
+        UUID seller = UUID.randomUUID();
+        UUID buyer = UUID.randomUUID();
+        economy.balances.put(buyer, 10_000L);
+        ItemStack copper = new ItemStack(Items.COPPER_INGOT, 1);
+        String expectedName = copper.getHoverName().getString();
+        economy.reasons.clear();
+        service.createSellOrder(seller, copper, 32, 64);
+        service.createBuyOrder(buyer, copper, 32, 64);
+
+        assertTrue(economy.reasons.stream().anyMatch(r -> r.equals("Сделка на бирже: " + expectedName)),
+                "settlement must read as a trade, not as ESCROW_CAPTURE: " + economy.reasons);
+        assertFalse(economy.reasons.stream().anyMatch(r -> r.contains("ESCROW") || r.contains("settle")),
+                "no technical vocabulary in settlement reasons");
+        assertFalse(economy.reasons.stream().anyMatch(r -> r.contains(buyer.toString())
+                        || r.contains(seller.toString())),
+                "no UUIDs in money reasons");
+    }
+
+    @Test
     void zeroExpiryDaysMeansInfiniteLifetime() {
         AuctionSettings d = AuctionSettings.defaults();
         AuctionSettings infinite = new AuctionSettings(
@@ -1068,6 +1126,7 @@ class AuctionServiceTest {
 
         final Map<UUID, Long> balances = new HashMap<>();
         final Map<String, Escrow> escrows = new HashMap<>();
+        final List<String> reasons = new ArrayList<>();
         final UUID treasury = UUID.randomUUID();
         int reserveCalls;
         int failReserveAfterCalls = Integer.MAX_VALUE;
@@ -1112,6 +1171,7 @@ class AuctionServiceTest {
             }
             balances.put(ownerId, getBalance(ownerId) - amount);
             escrows.put(referenceId, new Escrow(ownerId, amount, HoldingState.RESERVED, List.of()));
+            reasons.add(reason);
             return new ReserveResult(ReserveStatus.SUCCESS, amount, referenceId);
         }
 
@@ -1138,6 +1198,7 @@ class AuctionServiceTest {
             }
             escrows.put(referenceId,
                     new Escrow(escrow.owner, escrow.amount, HoldingState.CAPTURED, copy));
+            reasons.add(reason);
             if (captureButReportFailureOnce) {
                 captureButReportFailureOnce = false;
                 return new SettleResult(SettleStatus.FAILED, escrow.amount, referenceId);
@@ -1182,6 +1243,7 @@ class AuctionServiceTest {
             }
             escrows.put(oldReferenceId,
                     new Escrow(old.owner, old.amount, HoldingState.CAPTURED, List.copyOf(credits)));
+            reasons.add(reason);
             if (remainderAmount > 0) {
                 escrows.put(nextReferenceId,
                         new Escrow(old.owner, remainderAmount, HoldingState.RESERVED, List.of()));
@@ -1207,6 +1269,7 @@ class AuctionServiceTest {
             balances.merge(escrow.owner, escrow.amount, Long::sum);
             escrows.put(referenceId,
                     new Escrow(escrow.owner, escrow.amount, HoldingState.RELEASED, List.of()));
+            reasons.add(reason);
             return new ReleaseResult(ReleaseStatus.SUCCESS, referenceId);
         }
 

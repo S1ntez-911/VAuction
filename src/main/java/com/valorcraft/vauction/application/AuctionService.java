@@ -353,8 +353,10 @@ public final class AuctionService {
 
         // Durable intent уже содержит deterministic ref: crash до/после reserve
         // восстанавливается сканированием активных BUY, orphan escrow не возникает.
+        String holdReason = (immediate ? "Покупка на бирже" : "Заявка на покупку")
+                + ": " + unitSnapshot.displayLabel();
         EconomyGateway.ReserveResult r0 = economy.reserve(buyerId, total, ref0,
-                "buy hold " + orderId, "va:buy:" + orderId);
+                holdReason, "va:buy:" + orderId);
         if (!r0.isSuccessOrIdempotent()) {
             LOGGER.warn("reserve on buy creation failed {}: {}", ref0, r0.status());
             if (r0.status() == EconomyGateway.ReserveStatus.INSUFFICIENT_FUNDS) {
@@ -817,8 +819,9 @@ public final class AuctionService {
         boolean advance = remainingAfter > 0;
         int nextEpoch = buyOrder.refEpoch() + 1;
         String nextRef = advance ? refFor(buyOrder.orderId(), nextEpoch) : null;
+        String settledItem = buyOrder.item().displayLabel();
         EconomyGateway.SettleResult settled = economy.settleAndRollover(ref, credits,
-                nextRef, nextLocked, "settle+rollover " + trade.tradeId(),
+                nextRef, nextLocked, "Сделка на бирже: " + settledItem,
                 "va:rollover:" + trade.tradeId());
         if (!settled.isSuccessOrIdempotent()) {
             LOGGER.warn("S3 settle failed {}: {}", trade.tradeId(), settled.status());
@@ -1032,8 +1035,11 @@ public final class AuctionService {
         if (order.side() == OrderSide.BUY && order.escrowReference() != null
                 && !order.escrowReference().isBlank()) {
             String verb = action == OrderProcessingState.CANCEL ? "cancel" : "expire";
+            String releaseReason = action == OrderProcessingState.CANCEL
+                    ? "Возврат заявки: " + order.item().displayLabel()
+                    : "Возврат по истечении заявки: " + order.item().displayLabel();
             EconomyGateway.ReleaseResult rel = economy.release(order.escrowReference(),
-                    verb + " buy " + orderId, "va:" + verb + ":" + orderId);
+                    releaseReason, "va:" + verb + ":" + orderId);
             if (!rel.isSuccessOrIdempotent()) {
                 LOGGER.warn("{} release pending for {}: {}", verb, orderId, rel.status());
                 return false;

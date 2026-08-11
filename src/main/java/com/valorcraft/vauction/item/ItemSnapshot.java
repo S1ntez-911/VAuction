@@ -57,6 +57,11 @@ public record ItemSnapshot(
         return result;
     }
 
+    /** Человекочитаемое имя предмета для денежных операций; никогда не registry-id (опасный костыль не нужен: имя уже хранится). */
+    public String displayLabel() {
+        return displayName == null || displayName.isBlank() ? "товар" : displayName;
+    }
+
     /** Короткий лог-превью (registryId, колво, hash, размеры) — без NBT-дампа. */
     public String toLogSummary() {
         return "ItemSnapshot{registryId=" + registryId

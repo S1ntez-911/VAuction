@@ -269,7 +269,7 @@ public final class RecoveryService {
         }
         // NOT_FOUND после durable create-intent: reserve ещё не успел выполниться.
         EconomyGateway.ReserveResult rr = economy.reserve(order.ownerUuid(), need, ref,
-                "recovery " + order.orderId(), "va:recover:" + ref);
+                "Заявка на покупку: " + order.item().displayLabel(), "va:recover:" + ref);
         if (rr.isSuccessOrIdempotent()) {
             LOGGER.info("Восстановлен escrow {} ({}) на {}", ref, order.orderId(), need);
             return BackingResult.RESTORED;

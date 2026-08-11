@@ -518,6 +518,29 @@ class ServerOnlyGuiStructureTest {
         assertTrue(controller.contains("t.sellerNet()"));
     }
 
+    @Test
+    void moneyReasonsAreUserFacingAndNeverLeakEscrowInternals() throws Exception {
+        String service = source("com/valorcraft/vauction/application/AuctionService.java");
+        String recovery = source("com/valorcraft/vauction/recovery/RecoveryService.java");
+        String snapshot = source("com/valorcraft/vauction/item/ItemSnapshot.java");
+        assertTrue(service.contains("\"Заявка на покупку\""), "fresh buy order reserve must be user-facing");
+        assertTrue(service.contains("\"Покупка на бирже\""), "instant buy reserve must be user-facing");
+        assertTrue(service.contains("\"Сделка на бирже: \""), "settlement must read as a trade");
+        assertTrue(service.contains("\"Возврат заявки: \""), "cancel refund must be user-facing");
+        assertTrue(service.contains("\"Возврат по истечении заявки: \""), "expiry refund must be user-facing");
+        assertTrue(recovery.contains("\"Заявка на покупку: \""),
+                "recovery re-reserve must reuse the same human reason as placement");
+        assertTrue(snapshot.contains("displayLabel()"), "human item label lives on the snapshot");
+        assertFalse(service.contains("buy hold "), "technical reserve wording is gone");
+        assertFalse(service.contains("settle+rollover "), "technical settlement wording is gone");
+        assertFalse(recovery.contains("\"recovery "), "technical recovery wording is gone");
+        assertFalse(service.contains("\"ESCROW"), "ESCROW vocabulary must not reach the player");
+        assertTrue(service.contains("\"va:buy:\"") && service.contains("\"va:rollover:\""),
+                "idempotency keys stay technical and separate from the visible reason");
+        assertTrue(service.contains("\"va:\" + verb + \":\""),
+                "cancel/expire idempotency keys stay technical and separate from the visible reason");
+    }
+
     private static int count(String source, String needle) {
         return source.split(java.util.regex.Pattern.quote(needle), -1).length - 1;
     }
