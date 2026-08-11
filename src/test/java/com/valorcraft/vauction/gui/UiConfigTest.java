@@ -31,16 +31,23 @@ class UiConfigTest {
     @TempDir
     Path temp;
 
+    private Path uiFile() {
+        return temp.resolve("VMods").resolve("VAuction").resolve("vauction-ui.json");
+    }
+
     @Test
     void generatedConfigExposesButtonsAndEveryEditableScreenLayout() throws Exception {
         UiConfig.start(temp);
-        Path file = temp.resolve("vauction-ui.json");
+        Path file = uiFile();
         JsonObject root = JsonParser.parseString(Files.readString(file, StandardCharsets.UTF_8))
                 .getAsJsonObject();
 
-        assertEquals(3, root.get("format").getAsInt());
+        assertEquals(4, root.get("format").getAsInt());
         assertTrue(root.has("placeholderHelp"));
-        assertTrue(root.getAsJsonObject("placeholderHelp").has("price"));
+        assertTrue(root.getAsJsonObject("placeholderHelp").getAsJsonObject("screens")
+                .getAsJsonObject("product").has("buy_price"));
+        assertTrue(root.getAsJsonObject("decorations").getAsJsonObject("product")
+                .getAsJsonObject("background").has("fillEmpty"));
         assertTrue(root.getAsJsonObject("buttons").getAsJsonObject("back").has("name"));
         assertTrue(root.getAsJsonObject("buttons").getAsJsonObject("back").has("lore"));
         JsonObject layouts = root.getAsJsonObject("layouts");
@@ -54,14 +61,16 @@ class UiConfigTest {
 
     @Test
     void oldPartialConfigIsExpandedWithoutOverwritingOwnerText() throws Exception {
-        Path file = temp.resolve("vauction-ui.json");
-        Files.writeString(file, "{\"format\":2,\"texts\":{\"brand\":\"Моя биржа\"}}", StandardCharsets.UTF_8);
+        Path legacy = temp.resolve("vauction-ui.json");
+        Files.writeString(legacy, "{\"format\":2,\"texts\":{\"brand\":\"Моя биржа\"}}", StandardCharsets.UTF_8);
 
         UiConfig.start(temp);
 
+        Path file = uiFile();
         JsonObject upgraded = JsonParser.parseString(Files.readString(file, StandardCharsets.UTF_8))
                 .getAsJsonObject();
-        assertEquals(3, upgraded.get("format").getAsInt());
+        assertEquals(4, upgraded.get("format").getAsInt());
+        assertFalse(Files.exists(legacy));
         assertEquals("Моя биржа", upgraded.getAsJsonObject("texts").get("brand").getAsString());
         assertTrue(upgraded.has("layouts"));
         assertTrue(upgraded.has("screens"));
@@ -72,7 +81,7 @@ class UiConfigTest {
     @Test
     void reloadAppliesSlotsButtonTextLoreAndIcon() throws Exception {
         UiConfig.start(temp);
-        Path file = temp.resolve("vauction-ui.json");
+        Path file = uiFile();
         JsonObject root = JsonParser.parseString(Files.readString(file, StandardCharsets.UTF_8))
                 .getAsJsonObject();
         JsonObject product = root.getAsJsonObject("layouts").getAsJsonObject("product");
@@ -97,7 +106,7 @@ class UiConfigTest {
     @Test
     void badReloadKeepsLastKnownGoodLayout() throws Exception {
         UiConfig.start(temp);
-        Path file = temp.resolve("vauction-ui.json");
+        Path file = uiFile();
         JsonObject root = JsonParser.parseString(Files.readString(file, StandardCharsets.UTF_8))
                 .getAsJsonObject();
         JsonObject product = root.getAsJsonObject("layouts").getAsJsonObject("product");
@@ -120,12 +129,12 @@ class UiConfigTest {
     @Test
     void rowsTitlesHiddenSlotsAndPlaceholdersAreConfigurable() throws Exception {
         UiConfig.start(temp);
-        Path file = temp.resolve("vauction-ui.json");
+        Path file = uiFile();
         JsonObject root = JsonParser.parseString(Files.readString(file, StandardCharsets.UTF_8))
                 .getAsJsonObject();
         JsonObject screens = root.getAsJsonObject("screens");
         screens.getAsJsonObject("product").addProperty("rows", 3);
-        screens.getAsJsonObject("product").addProperty("title", "{item}: {price}");
+        screens.getAsJsonObject("product").addProperty("title", "{item}: {buy_price}");
         JsonObject product = root.getAsJsonObject("layouts").getAsJsonObject("product");
         product.addProperty("item", 13);
         product.addProperty("back", 18);
@@ -137,15 +146,15 @@ class UiConfigTest {
         assertEquals(3, UiConfig.rows("product"));
         assertEquals(-1, UiConfig.slot("product", "sell"));
         assertEquals("Слиток: 1.40", UiConfig.title("product",
-                java.util.Map.of("item", "Слиток", "price", "1.40")));
-        assertEquals("Цена 2.50, {unknown}", UiConfig.format("Цена {price}, {unknown}",
+                java.util.Map.of("item", "Слиток", "buy_price", "1.40")));
+        assertEquals("Цена 2.50, ", UiConfig.format("Цена {price}, {unknown}",
                 java.util.Map.of("price", "2.50")));
     }
 
     @Test
     void rowReductionRejectsSlotsOutsideNewCapacityAndKeepsPreviousSnapshot() throws Exception {
         UiConfig.start(temp);
-        Path file = temp.resolve("vauction-ui.json");
+        Path file = uiFile();
         JsonObject root = JsonParser.parseString(Files.readString(file, StandardCharsets.UTF_8))
                 .getAsJsonObject();
         root.getAsJsonObject("screens").getAsJsonObject("product").addProperty("rows", 3);
@@ -156,5 +165,52 @@ class UiConfigTest {
         assertTrue(error.contains("outside 0..26"));
         assertEquals(6, UiConfig.rows("product"));
         assertFalse(error.isBlank());
+    }
+
+    @Test
+    void decorationsFillOnlyEmptySlotsAndResolveScreenPlaceholders() throws Exception {
+        UiConfig.start(temp);
+        Path file = uiFile();
+        JsonObject root = JsonParser.parseString(Files.readString(file, StandardCharsets.UTF_8))
+                .getAsJsonObject();
+        JsonObject productDecorations = root.getAsJsonObject("decorations").getAsJsonObject("product");
+        JsonObject accent = productDecorations.getAsJsonObject("background").deepCopy();
+        accent.addProperty("enabled", true);
+        accent.addProperty("fillEmpty", false);
+        com.google.gson.JsonArray slots = new com.google.gson.JsonArray();
+        slots.add(0);
+        slots.add(1);
+        accent.add("slots", slots);
+        accent.addProperty("icon", "minecraft:black_stained_glass_pane");
+        accent.addProperty("name", "{item}");
+        com.google.gson.JsonArray lore = new com.google.gson.JsonArray();
+        lore.add("Покупка: {buy_price}");
+        accent.add("lore", lore);
+        productDecorations.add("accent", accent);
+        Files.writeString(file, root.toString(), StandardCharsets.UTF_8);
+
+        assertNull(UiConfig.reload());
+        net.minecraft.world.SimpleContainer box = new net.minecraft.world.SimpleContainer(54);
+        box.setItem(0, new net.minecraft.world.item.ItemStack(Items.DIAMOND));
+        UiConfig.decorate("product", box, java.util.Map.of("item", "Слиток", "buy_price", "1.40"));
+        assertEquals(Items.DIAMOND, box.getItem(0).getItem());
+        assertEquals(Items.BLACK_STAINED_GLASS_PANE, box.getItem(1).getItem());
+        assertEquals("Слиток", box.getItem(1).getHoverName().getString());
+        assertTrue(box.getItem(2).isEmpty());
+    }
+
+    @Test
+    void unavailableScreenPlaceholderRejectsReload() throws Exception {
+        UiConfig.start(temp);
+        Path file = uiFile();
+        JsonObject root = JsonParser.parseString(Files.readString(file, StandardCharsets.UTF_8))
+                .getAsJsonObject();
+        root.getAsJsonObject("screens").getAsJsonObject("product").addProperty("title", "{price}");
+        Files.writeString(file, root.toString(), StandardCharsets.UTF_8);
+
+        String error = UiConfig.reload();
+        assertNotNull(error);
+        assertTrue(error.contains("screens.product.title"));
+        assertTrue(error.contains("unavailable placeholder {price}"));
     }
 }

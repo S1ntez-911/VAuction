@@ -5,10 +5,13 @@ import com.google.gson.JsonElement;
 import com.google.gson.JsonObject;
 import com.google.gson.JsonParser;
 import com.google.gson.JsonPrimitive;
+import com.valorcraft.vauction.config.VAuctionConfigPaths;
 import net.minecraft.core.registries.BuiltInRegistries;
 import net.minecraft.network.chat.Component;
 import net.minecraft.resources.ResourceLocation;
+import net.minecraft.world.SimpleContainer;
 import net.minecraft.world.item.Item;
+import net.minecraft.world.item.ItemStack;
 import net.minecraft.world.item.Items;
 import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
@@ -24,7 +27,7 @@ import java.util.Set;
 
 /**
  * Поверхностный конфиг интерфейса биржи: цвета, тексты, строки лора, кнопки.
- * Файл {@code config/vauction-ui.json} правится без пересборки и применяется
+ * Файл {@code config/VMods/VAuction/vauction-ui.json} правится без пересборки и применяется
  * командой {@code /ah admin reloadui} (старый {@code /ah ui reload} тоже работает).
  * Любая секция и любой ключ опциональны:
  * недостающие значения берутся из встроенных русских значений по умолчанию.
@@ -50,6 +53,16 @@ public final class UiConfig {
     /** Vanilla chest screen: 1..6 rows, custom title with contextual placeholders. */
     record ScreenCfg(int rows, String title) {}
 
+    /** Non-clickable configurable item rendered only into currently empty slots. */
+    record DecorationCfg(boolean enabled, boolean fillEmpty, List<Integer> slots, Item iconItem,
+                         int count, String name, List<String> lore,
+                         String colorKey, String loreColorKey) {
+        DecorationCfg {
+            slots = slots == null ? List.of() : List.copyOf(slots);
+            lore = lore == null ? List.of() : List.copyOf(lore);
+        }
+    }
+
     /** Кнопка: иконка + ключи имени и подписи (nameKey может отсутствовать, имя задаётся кодом). */
     record ButtonCfg(Item iconItem, String nameKey, String loreKey,
                      String name, List<String> lore, String colorKey, String loreColorKey) {
@@ -72,12 +85,15 @@ public final class UiConfig {
     private static final LinkedHashMap<String, LinkedHashMap<String, List<Integer>>> LAYOUTS = new LinkedHashMap<>();
     private static final LinkedHashMap<String, ScreenCfg> SCREENS = new LinkedHashMap<>();
     private static final LinkedHashMap<String, String> PLACEHOLDER_HELP = new LinkedHashMap<>();
+    private static final LinkedHashMap<String, List<String>> SCREEN_PLACEHOLDERS = new LinkedHashMap<>();
+    private static final LinkedHashMap<String, LinkedHashMap<String, DecorationCfg>> DECORATIONS = new LinkedHashMap<>();
 
     private static volatile LinkedHashMap<String, String> texts = new LinkedHashMap<>();
     private static volatile LinkedHashMap<String, List<String>> lore = new LinkedHashMap<>();
     private static volatile LinkedHashMap<String, ButtonCfg> buttons = new LinkedHashMap<>();
     private static volatile LinkedHashMap<String, LinkedHashMap<String, List<Integer>>> layouts = new LinkedHashMap<>();
     private static volatile LinkedHashMap<String, ScreenCfg> screens = new LinkedHashMap<>();
+    private static volatile LinkedHashMap<String, LinkedHashMap<String, DecorationCfg>> decorations = new LinkedHashMap<>();
 
     static {
         PLACEHOLDER_HELP.put("player", "Имя игрока");
@@ -94,6 +110,7 @@ public final class UiConfig {
         PLACEHOLDER_HELP.put("requested", "Запрошенное количество");
         PLACEHOLDER_HELP.put("fillable", "Количество, доступное для мгновенной сделки");
         PLACEHOLDER_HELP.put("worst_price", "Предельная цена мгновенной сделки");
+        PLACEHOLDER_HELP.put("market_price", "Ориентир текущего рынка");
         PLACEHOLDER_HELP.put("category", "Текущий раздел каталога");
         PLACEHOLDER_HELP.put("search", "Текущий поисковый запрос");
         PLACEHOLDER_HELP.put("page", "Текущая страница, начиная с 1");
@@ -406,6 +423,23 @@ public final class UiConfig {
         screen("my", 6, "Биржа: моё");
         screen("manage", 6, "Биржа: заявка");
 
+        screenPlaceholders("catalogue", "category", "search", "page", "pages", "results");
+        screenPlaceholders("search", "category", "search", "page", "pages", "results");
+        screenPlaceholders("categories", "category");
+        screenPlaceholders("product", "item", "available", "buy_price", "sell_price", "last_price");
+        screenPlaceholders("immediate", "item", "side", "quantity", "price", "total", "available",
+                "requested", "fillable", "worst_price");
+        screenPlaceholders("limit", "item", "side", "quantity", "price", "total", "available");
+        screenPlaceholders("my", "page", "pages", "results");
+        screenPlaceholders("manage", "item", "side", "quantity", "price", "total");
+
+        for (String screen : SCREENS.keySet()) {
+            LinkedHashMap<String, DecorationCfg> values = new LinkedHashMap<>();
+            values.put("background", new DecorationCfg(false, true, List.of(), Items.GRAY_STAINED_GLASS_PANE,
+                    1, " ", List.of(), "muted", "muted"));
+            DECORATIONS.put(screen, values);
+        }
+
         layout("catalogue",
                 "content", range(0, 45), "empty", 22, "previous", 45,
                 "categories", 46, "search", 48, "info", 49, "my", 50, "next", 53);
@@ -430,8 +464,12 @@ public final class UiConfig {
 
     /** Старт на загрузке сервера: задаём путь и применяем файл (или создаём дефолтный). */
     public static void start(Path configDir) {
-        file = configDir.resolve("vauction-ui.json");
-        reload();
+        try {
+            file = VAuctionConfigPaths.file(configDir, "vauction-ui.json");
+            reload();
+        } catch (java.io.IOException e) {
+            throw new IllegalStateException("Cannot prepare config/VMods/VAuction", e);
+        }
     }
 
     /** Применяет файл конфига. Возвращает null при успехе или текст ошибки. */
@@ -448,8 +486,11 @@ public final class UiConfig {
             boolean upgraded = mergeMissing(root, defaults);
             if (!root.has("format") || !root.get("format").isJsonPrimitive()
                     || !root.getAsJsonPrimitive("format").isNumber()
-                    || root.get("format").getAsInt() < 3) {
-                root.addProperty("format", 3);
+                    || root.get("format").getAsInt() < 4) {
+                root.addProperty("format", 4);
+                // Help is generated documentation, not an owner setting. Replace the old
+                // flat list so upgraded files show the exact per-screen reference.
+                root.add("placeholderHelp", defaults.get("placeholderHelp").deepCopy());
                 upgraded = true;
             }
             LinkedHashMap<String, String> t = new LinkedHashMap<>(TEXTS);
@@ -470,8 +511,13 @@ public final class UiConfig {
             JsonObject jLayouts = obj(root, "layouts");
             if (jLayouts != null) applyLayouts(ly, jLayouts);
             validateLayouts(ly, sc);
+            LinkedHashMap<String, LinkedHashMap<String, DecorationCfg>> dc = copyDecorations(DECORATIONS);
+            JsonObject jDecorations = obj(root, "decorations");
+            if (jDecorations != null) applyDecorations(dc, jDecorations);
+            validateDecorations(dc, sc);
             LinkedHashMap<String, String> colors = stringsOf(obj(root, "colors"));
             validateColors(colors);
+            validateTemplates(t, b, sc, dc);
 
             // Publish one complete immutable-enough snapshot only after every section
             // has parsed and validated. A bad reload leaves the previous UI active.
@@ -480,6 +526,7 @@ public final class UiConfig {
             buttons = b;
             screens = sc;
             layouts = ly;
+            decorations = dc;
             MarketPalette.replace(colors);
             if (upgraded) {
                 Files.writeString(file, new GsonBuilder().setPrettyPrinting().disableHtmlEscaping()
@@ -494,10 +541,23 @@ public final class UiConfig {
 
     private static String defaultJson() {
         JsonObject root = new JsonObject();
-        root.addProperty("format", 3);
-        root.addProperty("help", "Ширина всегда 9. screens.rows задаёт 1..6 рядов. В layouts число ставит элемент в слот, null скрывает его. Действия кнопок остаются неизменными.");
+        root.addProperty("format", 4);
+        root.addProperty("help", "Ширина всегда 9. screens.rows задаёт 1..6 рядов. layouts: число ставит элемент в слот, null скрывает. decorations добавляет некликабельные элементы и заполнители. Действия кнопок неизменны.");
         JsonObject placeholderHelp = new JsonObject();
-        PLACEHOLDER_HELP.forEach(placeholderHelp::addProperty);
+        JsonObject commonPlaceholders = new JsonObject();
+        commonPlaceholders.addProperty("player", PLACEHOLDER_HELP.get("player"));
+        commonPlaceholders.addProperty("screen", PLACEHOLDER_HELP.get("screen"));
+        placeholderHelp.add("common", commonPlaceholders);
+        JsonObject screenPlaceholderHelp = new JsonObject();
+        SCREEN_PLACEHOLDERS.forEach((screen, names) -> {
+            JsonObject available = new JsonObject();
+            available.addProperty("player", PLACEHOLDER_HELP.get("player"));
+            available.addProperty("screen", PLACEHOLDER_HELP.get("screen"));
+            names.forEach(name -> available.addProperty(name, PLACEHOLDER_HELP.get(name)));
+            screenPlaceholderHelp.add(screen, available);
+        });
+        placeholderHelp.add("screens", screenPlaceholderHelp);
+        placeholderHelp.addProperty("rule", "Неизвестный плейсхолдер запрещает reload; известный, но недоступный на текущем экране, выводится пустым.");
         root.add("placeholderHelp", placeholderHelp);
         JsonObject colors = new JsonObject();
         for (Map.Entry<String, String> e : MarketPalette.DEFAULT_COLORS.entrySet()) {
@@ -542,6 +602,7 @@ public final class UiConfig {
         });
         root.add("screens", screens);
         root.add("layouts", layoutsJson(LAYOUTS));
+        root.add("decorations", decorationsJson(DECORATIONS));
         return new GsonBuilder().setPrettyPrinting().disableHtmlEscaping().create().toJson(root);
     }
 
@@ -554,14 +615,18 @@ public final class UiConfig {
         return v;
     }
 
-    /** Replaces known placeholders and intentionally leaves unknown ones visible. */
+    /** Replaces available placeholders; unavailable known values render as empty text. */
     static String format(String template, Map<String, String> placeholders) {
-        if (template == null || template.isEmpty() || placeholders == null || placeholders.isEmpty()) return template;
-        String result = template;
-        for (Map.Entry<String, String> entry : placeholders.entrySet()) {
-            result = result.replace("{" + entry.getKey() + "}", entry.getValue() == null ? "" : entry.getValue());
+        if (template == null || template.isEmpty()) return template;
+        java.util.regex.Matcher matcher = java.util.regex.Pattern.compile("\\{([^{}]+)}")
+                .matcher(template);
+        StringBuffer result = new StringBuffer();
+        while (matcher.find()) {
+            String value = placeholders == null ? null : placeholders.get(matcher.group(1));
+            matcher.appendReplacement(result, java.util.regex.Matcher.quoteReplacement(value == null ? "" : value));
         }
-        return result;
+        matcher.appendTail(result);
+        return result.toString();
     }
 
     static String text(String key) {
@@ -589,6 +654,33 @@ public final class UiConfig {
         ScreenCfg cfg = screens.get(screen);
         if (cfg == null) cfg = SCREENS.get(screen);
         return format(cfg == null ? text("window.title") : cfg.title(), placeholders);
+    }
+
+    static void decorate(String screen, SimpleContainer box, Map<String, String> placeholders) {
+        LinkedHashMap<String, DecorationCfg> configured = decorations.get(screen);
+        if (configured == null) configured = DECORATIONS.get(screen);
+        if (configured == null) return;
+        for (DecorationCfg cfg : configured.values()) {
+            if (!cfg.enabled()) continue;
+            ItemStack item = new ItemStack(cfg.iconItem());
+            item.setCount(cfg.count());
+            List<Component> lore = cfg.lore().stream()
+                    .map(line -> MarketText.colored(format(line, placeholders),
+                            MarketPalette.byKey(cfg.loreColorKey())))
+                    .toList();
+            item = GuiItems.namedButton(item,
+                    MarketText.colored(format(cfg.name(), placeholders), MarketPalette.byKey(cfg.colorKey())), lore);
+            for (int slot : cfg.slots()) putDecoration(box, slot, item);
+            if (cfg.fillEmpty()) {
+                for (int slot = 0; slot < box.getContainerSize(); slot++) putDecoration(box, slot, item);
+            }
+        }
+    }
+
+    private static void putDecoration(SimpleContainer box, int slot, ItemStack item) {
+        if (slot >= 0 && slot < box.getContainerSize() && box.getItem(slot).isEmpty()) {
+            box.setItem(slot, item.copy());
+        }
     }
 
     static int slot(String screen, String key) {
@@ -764,6 +856,14 @@ public final class UiConfig {
         SCREENS.put(key, new ScreenCfg(rows, title));
     }
 
+    private static void screenPlaceholders(String screen, String... names) {
+        ArrayList<String> available = new ArrayList<>();
+        available.add("player");
+        available.add("screen");
+        available.addAll(List.of(names));
+        SCREEN_PLACEHOLDERS.put(screen, List.copyOf(available));
+    }
+
     private static List<Integer> range(int startInclusive, int endExclusive) {
         ArrayList<Integer> result = new ArrayList<>();
         for (int i = startInclusive; i < endExclusive; i++) result.add(i);
@@ -779,6 +879,72 @@ public final class UiConfig {
             result.put(screen, copy);
         });
         return result;
+    }
+
+    private static LinkedHashMap<String, LinkedHashMap<String, DecorationCfg>> copyDecorations(
+            Map<String, ? extends Map<String, DecorationCfg>> source) {
+        LinkedHashMap<String, LinkedHashMap<String, DecorationCfg>> result = new LinkedHashMap<>();
+        source.forEach((screen, values) -> result.put(screen, new LinkedHashMap<>(values)));
+        return result;
+    }
+
+    private static void applyDecorations(
+            LinkedHashMap<String, LinkedHashMap<String, DecorationCfg>> target, JsonObject configured) {
+        for (String screen : configured.keySet()) {
+            if (!target.containsKey(screen)) {
+                throw new IllegalArgumentException("Unknown UI screen in decorations: " + screen);
+            }
+            if (!configured.get(screen).isJsonObject()) {
+                throw new IllegalArgumentException("decorations." + screen + " must be an object");
+            }
+            JsonObject entries = configured.getAsJsonObject(screen);
+            for (String name : entries.keySet()) {
+                if (!entries.get(name).isJsonObject()) {
+                    throw new IllegalArgumentException("Decoration must be an object: " + screen + "." + name);
+                }
+                JsonObject value = entries.getAsJsonObject(name);
+                DecorationCfg base = target.get(screen).get(name);
+                boolean enabled = boolOr(value, "enabled", base != null && base.enabled());
+                boolean fillEmpty = boolOr(value, "fillEmpty", base != null && base.fillEmpty());
+                List<Integer> slots = value.has("slots") ? integerArray(value, "slots")
+                        : base == null ? List.of() : base.slots();
+                Item icon = value.has("icon") ? itemOf(value.get("icon").getAsString())
+                        : base == null ? Items.GRAY_STAINED_GLASS_PANE : base.iconItem();
+                int count = value.has("count") ? value.get("count").getAsInt() : base == null ? 1 : base.count();
+                String directName = strOrNull(value, "name");
+                String itemName = directName == null ? base == null ? " " : base.name() : directName;
+                List<String> itemLore = value.has("lore") ? stringArrayOrEmpty(value, "lore")
+                        : base == null ? List.of() : base.lore();
+                String color = strOrNull(value, "color");
+                String loreColor = strOrNull(value, "loreColor");
+                target.get(screen).put(name, new DecorationCfg(enabled, fillEmpty, slots, icon, count,
+                        itemName, itemLore, color == null ? base == null ? "muted" : base.colorKey() : color,
+                        loreColor == null ? base == null ? "muted" : base.loreColorKey() : loreColor));
+            }
+        }
+    }
+
+    private static List<Integer> integerArray(JsonObject object, String key) {
+        if (!object.get(key).isJsonArray()) {
+            throw new IllegalArgumentException(key + " must be an array of slots");
+        }
+        ArrayList<Integer> values = new ArrayList<>();
+        for (JsonElement element : object.getAsJsonArray(key)) {
+            if (!element.isJsonPrimitive() || !element.getAsJsonPrimitive().isNumber()) {
+                throw new IllegalArgumentException(key + " must contain only slot numbers");
+            }
+            values.add(element.getAsInt());
+        }
+        return List.copyOf(values);
+    }
+
+    private static boolean boolOr(JsonObject object, String key, boolean fallback) {
+        if (!object.has(key)) return fallback;
+        JsonElement value = object.get(key);
+        if (!value.isJsonPrimitive() || !value.getAsJsonPrimitive().isBoolean()) {
+            throw new IllegalArgumentException(key + " must be true or false");
+        }
+        return value.getAsBoolean();
     }
 
     private static void applyLayouts(LinkedHashMap<String, LinkedHashMap<String, List<Integer>>> target,
@@ -890,6 +1056,74 @@ public final class UiConfig {
         }
     }
 
+    private static void validateDecorations(
+            Map<String, ? extends Map<String, DecorationCfg>> configured,
+            Map<String, ScreenCfg> screenSettings) {
+        for (Map.Entry<String, ? extends Map<String, DecorationCfg>> screen : configured.entrySet()) {
+            int capacity = screenSettings.get(screen.getKey()).rows() * 9;
+            for (Map.Entry<String, DecorationCfg> entry : screen.getValue().entrySet()) {
+                DecorationCfg cfg = entry.getValue();
+                String path = "decorations." + screen.getKey() + "." + entry.getKey();
+                if (cfg.count() < 1 || cfg.count() > 64) {
+                    throw new IllegalArgumentException(path + ".count must be between 1 and 64");
+                }
+                if (cfg.enabled() && !cfg.fillEmpty() && cfg.slots().isEmpty()) {
+                    throw new IllegalArgumentException(path + " needs fillEmpty=true or at least one slot");
+                }
+                if (!MarketPalette.DEFAULT_COLORS.containsKey(cfg.colorKey())
+                        || !MarketPalette.DEFAULT_COLORS.containsKey(cfg.loreColorKey())) {
+                    throw new IllegalArgumentException(path + " uses an unknown color");
+                }
+                Set<Integer> unique = new java.util.HashSet<>();
+                for (int slot : cfg.slots()) {
+                    if (slot < 0 || slot >= capacity) {
+                        throw new IllegalArgumentException(path + " slot outside 0.." + (capacity - 1));
+                    }
+                    if (!unique.add(slot)) throw new IllegalArgumentException(path + " repeats slot " + slot);
+                }
+            }
+        }
+    }
+
+    private static void validateTemplates(Map<String, String> configuredTexts,
+                                          Map<String, ButtonCfg> configuredButtons,
+                                          Map<String, ScreenCfg> configuredScreens,
+                                          Map<String, ? extends Map<String, DecorationCfg>> configuredDecorations) {
+        Set<String> all = PLACEHOLDER_HELP.keySet();
+        for (Map.Entry<String, ScreenCfg> entry : configuredScreens.entrySet()) {
+            validateTemplate("screens." + entry.getKey() + ".title", entry.getValue().title(),
+                    new java.util.HashSet<>(SCREEN_PLACEHOLDERS.get(entry.getKey())));
+        }
+        for (Map.Entry<String, ButtonCfg> entry : configuredButtons.entrySet()) {
+            ButtonCfg cfg = entry.getValue();
+            if (cfg.name() != null) validateTemplate("buttons." + entry.getKey() + ".name", cfg.name(), all);
+            else if (cfg.nameKey() != null) validateTemplate("texts." + cfg.nameKey(),
+                    configuredTexts.getOrDefault(cfg.nameKey(), ""), all);
+            for (String line : cfg.lore()) validateTemplate("buttons." + entry.getKey() + ".lore", line, all);
+            if (cfg.lore().isEmpty() && cfg.loreKey() != null) validateTemplate("texts." + cfg.loreKey(),
+                    configuredTexts.getOrDefault(cfg.loreKey(), ""), all);
+        }
+        for (Map.Entry<String, ? extends Map<String, DecorationCfg>> screen : configuredDecorations.entrySet()) {
+            Set<String> allowed = new java.util.HashSet<>(SCREEN_PLACEHOLDERS.get(screen.getKey()));
+            for (Map.Entry<String, DecorationCfg> entry : screen.getValue().entrySet()) {
+                String path = "decorations." + screen.getKey() + "." + entry.getKey();
+                validateTemplate(path + ".name", entry.getValue().name(), allowed);
+                for (String line : entry.getValue().lore()) validateTemplate(path + ".lore", line, allowed);
+            }
+        }
+    }
+
+    private static void validateTemplate(String path, String template, Set<String> allowed) {
+        if (template == null) return;
+        java.util.regex.Matcher matcher = java.util.regex.Pattern.compile("\\{([^{}]+)}")
+                .matcher(template);
+        while (matcher.find()) {
+            if (!allowed.contains(matcher.group(1))) {
+                throw new IllegalArgumentException(path + " uses unavailable placeholder {" + matcher.group(1) + "}");
+            }
+        }
+    }
+
     private static void validateColors(Map<String, String> colors) {
         for (Map.Entry<String, String> color : colors.entrySet()) {
             if (!MarketPalette.DEFAULT_COLORS.containsKey(color.getKey())) {
@@ -917,6 +1151,33 @@ public final class UiConfig {
                 }
             });
             result.add(screen, object);
+        });
+        return result;
+    }
+
+    private static JsonObject decorationsJson(
+            Map<String, ? extends Map<String, DecorationCfg>> source) {
+        JsonObject result = new JsonObject();
+        source.forEach((screen, entries) -> {
+            JsonObject screenJson = new JsonObject();
+            entries.forEach((name, cfg) -> {
+                JsonObject value = new JsonObject();
+                value.addProperty("enabled", cfg.enabled());
+                value.addProperty("fillEmpty", cfg.fillEmpty());
+                com.google.gson.JsonArray slots = new com.google.gson.JsonArray();
+                cfg.slots().forEach(slots::add);
+                value.add("slots", slots);
+                value.addProperty("icon", BuiltInRegistries.ITEM.getKey(cfg.iconItem()).toString());
+                value.addProperty("count", cfg.count());
+                value.addProperty("name", cfg.name());
+                com.google.gson.JsonArray lore = new com.google.gson.JsonArray();
+                cfg.lore().forEach(lore::add);
+                value.add("lore", lore);
+                value.addProperty("color", cfg.colorKey());
+                value.addProperty("loreColor", cfg.loreColorKey());
+                screenJson.add(name, value);
+            });
+            result.add(screen, screenJson);
         });
         return result;
     }

@@ -363,6 +363,7 @@ public final class MarketController {
         long last = summary == null ? 0 : summary.lastTradePrice();
         int available = service().availableCount(player.getUUID(), s.unit);
         context(player, s,
+                "item", s.unit.getHoverName().getString(),
                 "available", available,
                 "buy_price", moneyOrUnavailable(ask),
                 "sell_price", moneyOrUnavailable(bid),
@@ -449,6 +450,8 @@ public final class MarketController {
         MarketSummary summary = market == null ? null : market.card().summary();
         long shownPrice = summary == null ? 0 : (buy ? summary.bestAsk() : summary.bestBid());
         context(player, s,
+                "item", s.unit.getHoverName().getString(),
+                "side", UiConfig.text(buy ? "my.purchase" : "my.sell"),
                 "quantity", quote.requestedQuantity(),
                 "requested", quote.requestedQuantity(),
                 "fillable", quote.fillableQuantity(),
@@ -586,6 +589,8 @@ public final class MarketController {
         int available = s.orderSide == OrderSide.SELL
                 ? service().availableCount(player.getUUID(), s.unit) : 0;
         context(player, s,
+                "item", s.unit.getHoverName().getString(),
+                "side", UiConfig.text(buy ? "my.purchase" : "my.sell"),
                 "quantity", s.quantity,
                 "price", CurrencyText.format(s.price),
                 "total", CurrencyText.format(total),
@@ -641,6 +646,8 @@ public final class MarketController {
         }
         s.screen = MarketScreen.PRICE_WARNING;
         context(player, s,
+                "item", s.unit.getHoverName().getString(),
+                "side", UiConfig.text(s.orderSide == OrderSide.BUY ? "my.purchase" : "my.sell"),
                 "quantity", s.quantity,
                 "price", CurrencyText.format(s.price),
                 "total", safeTotal(s.price, s.quantity),
@@ -786,6 +793,8 @@ public final class MarketController {
         s.price = action.amount();
         s.screen = MarketScreen.ORDER_MANAGE;
         context(player, s,
+                "item", s.unit.getHoverName().getString(),
+                "side", UiConfig.text(s.orderSide == OrderSide.BUY ? "my.purchase" : "my.sell"),
                 "quantity", s.quantity,
                 "price", CurrencyText.format(s.price),
                 "total", safeTotal(s.price, s.quantity));
@@ -807,6 +816,8 @@ public final class MarketController {
 
     private void renderCancel(ServerPlayer player, MarketSession s) {
         context(player, s,
+                "item", s.unit.getHoverName().getString(),
+                "side", UiConfig.text(s.orderSide == OrderSide.BUY ? "my.purchase" : "my.sell"),
                 "quantity", s.quantity,
                 "price", CurrencyText.format(s.price),
                 "total", safeTotal(s.price, s.quantity));
@@ -897,6 +908,8 @@ public final class MarketController {
     }
 
     private void openBox(ServerPlayer player, MarketSession s, SimpleContainer box) {
+        String layout = layoutKey(s.screen);
+        if (layout != null) UiConfig.decorate(layout, box, s.placeholders);
         int rows = box.getContainerSize() / 9;
         if (s.menu != null && s.contents != null && player.containerMenu == s.menu
                 && s.openScreen == s.screen && s.openRows == rows) {
@@ -947,9 +960,6 @@ public final class MarketController {
         s.placeholders.put("player", player.getGameProfile().getName());
         String screen = layoutKey(s.screen);
         s.placeholders.put("screen", screen == null ? s.screen.name().toLowerCase(java.util.Locale.ROOT) : screen);
-        s.placeholders.put("item", s.unit.isEmpty() ? "" : s.unit.getHoverName().getString());
-        s.placeholders.put("side", s.orderSide == null ? ""
-                : UiConfig.text(s.orderSide == OrderSide.BUY ? "my.purchase" : "my.sell"));
         for (int i = 0; i + 1 < values.length; i += 2) {
             s.placeholders.put(String.valueOf(values[i]), String.valueOf(values[i + 1]));
         }

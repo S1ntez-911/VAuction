@@ -6,7 +6,7 @@ import java.util.Objects;
 /**
  * Неизменяемый снимок настроек аукциона на момент операции.
  * <p>
- * Обновляется из {@link AuctionConfig} (ForgeConfigSpec, файл vauction-server.toml)
+ * Обновляется из {@link AuctionConfig} (ForgeConfigSpec, файл VMods/VAuction/vauction-server.toml)
  * при старте сервера, берётся в операции (комиссия фиксируется для лота при
  * создании и сохраняется в БД). Деньги — всегда в минимальных единицах (long),
  * комиссия — в базисных пунктах (int bps): никаких double в хранящихся суммах.

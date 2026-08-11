@@ -3,12 +3,14 @@ package com.valorcraft.vauction.config;
 import net.minecraftforge.common.ForgeConfigSpec;
 import net.minecraftforge.fml.ModLoadingContext;
 import net.minecraftforge.fml.config.ModConfig;
+import net.minecraftforge.fml.loading.FMLPaths;
 
+import java.io.IOException;
 import java.util.Arrays;
 import java.util.List;
 
 /**
- * Серверный конфиг аукциона ({@code vauction-server.toml}) на ForgeConfigSpec.
+ * Серверный конфиг аукциона ({@code config/VMods/VAuction/vauction-server.toml}) на ForgeConfigSpec.
  * <p>
  * Снимок значений берётся через {@link #snapshot()} (immutable {@link AuctionSettings})
  * — он и передаётся в сервисы, в операции сохраняется в БД. Комиссия задаётся
@@ -135,7 +137,18 @@ public final class AuctionConfig {
 
     /** Регистрация файла конфигурации (в конструкторе мода). */
     public static void register() {
-        ModLoadingContext.get().registerConfig(ModConfig.Type.SERVER, SPEC, "vauction-server.toml");
+        try {
+            VAuctionConfigPaths.file(FMLPaths.CONFIGDIR.get(), "vauction-server.toml");
+            VAuctionConfigPaths.migrateLegacyWorldFile(FMLPaths.CONFIGDIR.get(), FMLPaths.GAMEDIR.get(),
+                    "vauction-server.toml");
+        } catch (IOException e) {
+            throw new IllegalStateException("Cannot prepare config/VMods/VAuction", e);
+        }
+        // COMMON is intentional: Forge SERVER configs live inside each world's
+        // serverconfig directory, while ValorCraft keeps all mod configs together.
+        // The values are still consumed exclusively by the dedicated server.
+        ModLoadingContext.get().registerConfig(ModConfig.Type.COMMON, SPEC,
+                VAuctionConfigPaths.forgeFileName("vauction-server.toml"));
     }
 
     /** Актуальный снимок настроек (для сервисов и операций). */
