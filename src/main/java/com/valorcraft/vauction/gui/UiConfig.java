@@ -57,14 +57,49 @@ public final class UiConfig {
     static {
         TEXTS.put("brand", "◆ Биржа ValorCraft");
         TEXTS.put("window.title", "Биржа ValorCraft");
+        TEXTS.put("window.catalogue", "Биржа: каталог");
+        TEXTS.put("window.search", "Биржа: поиск");
+        TEXTS.put("window.product", "Биржа: товар");
+        TEXTS.put("window.buy", "Биржа: покупка");
+        TEXTS.put("window.sell", "Биржа: продажа");
+        TEXTS.put("window.buyOrder", "Заявка на покупку");
+        TEXTS.put("window.sellOrder", "Заявка на продажу");
+        TEXTS.put("window.priceWarning", "Биржа: проверьте цену");
+        TEXTS.put("window.my", "Биржа: мои сделки");
+        TEXTS.put("window.manage", "Биржа: заявка");
+        TEXTS.put("window.cancel", "Биржа: отмена заявки");
 
         TEXTS.put("card.buy", "Купить");
         TEXTS.put("card.sell", "Продать");
         TEXTS.put("card.trade", "Сделка");
-        TEXTS.put("card.hintBuy", "ЛКМ: купить");
-        TEXTS.put("card.hintSell", "ПКМ: продать");
         TEXTS.put("card.unavailable", "нет предложений");
         TEXTS.put("card.dash", "—");
+        TEXTS.put("catalog.buy", "Купить сейчас");
+        TEXTS.put("catalog.sell", "Продать сейчас");
+        TEXTS.put("catalog.open", "Нажмите, чтобы открыть товар");
+
+        TEXTS.put("product.title", "Выберите действие");
+        TEXTS.put("product.buy", "Цена покупки");
+        TEXTS.put("product.sell", "Цена продажи");
+        TEXTS.put("product.last", "Последняя сделка");
+        TEXTS.put("product.available", "У вас");
+        TEXTS.put("product.buyNow", "Купить сейчас");
+        TEXTS.put("product.sellNow", "Продать сейчас");
+        TEXTS.put("product.buyOrder", "Заявка на покупку");
+        TEXTS.put("product.sellOrder", "Заявка на продажу");
+        TEXTS.put("product.nowAt", "Текущая цена: {price} за штуку");
+        TEXTS.put("product.orderLore", "Сейчас предложений нет. Укажите свою цену");
+        TEXTS.put("product.sellDisabled", "Продажа недоступна");
+        TEXTS.put("product.sellDisabledLore", "В инвентаре нет точно такого предмета");
+
+        TEXTS.put("filter.all", "Все товары");
+        TEXTS.put("filter.resources", "Ресурсы");
+        TEXTS.put("filter.food", "Еда");
+        TEXTS.put("filter.tools", "Инструменты");
+        TEXTS.put("filter.machines", "Механизмы");
+        TEXTS.put("filter.open", "Показать эту категорию");
+        TEXTS.put("filter.active", "Категория выбрана");
+        TEXTS.put("filter.reset", "Нажмите, чтобы показать всё");
 
         TEXTS.put("instant.actionBuy", "ПОКУПКА");
         TEXTS.put("instant.actionSell", "ПРОДАЖА");
@@ -93,11 +128,13 @@ public final class UiConfig {
         TEXTS.put("editor.reserveNote", "Деньги резервируются");
         TEXTS.put("editor.changePrice", "Изменить цену");
         TEXTS.put("editor.changePriceLore", "Своя цена");
-        TEXTS.put("editor.nowBuy", "Купить сейчас");
-        TEXTS.put("editor.nowSell", "Продать сейчас");
-        TEXTS.put("editor.nowLore", "По рынку");
         TEXTS.put("editor.submit", "Выставить");
         TEXTS.put("editor.submitLore", "Заявка по указанной цене");
+        TEXTS.put("editor.submitBuy", "Разместить заявку на покупку");
+        TEXTS.put("editor.submitSell", "Разместить заявку на продажу");
+        TEXTS.put("editor.submitSummary", "{quantity} шт. по {price}; всего {total}");
+        TEXTS.put("editor.priceButton", "Цена: {price}");
+        TEXTS.put("editor.priceButtonLore", "Нажмите, чтобы ввести другую цену");
 
         TEXTS.put("button.back", "Назад");
         TEXTS.put("button.backLore", "Каталог");
@@ -133,7 +170,7 @@ public final class UiConfig {
         TEXTS.put("nav.ordersHint", "Заявки, покупки и возвраты");
         TEXTS.put("nav.infoTitle", "Биржа");
         TEXTS.put("nav.myTitle", "Моё");
-        TEXTS.put("nav.infoHintsMulti", "ЛКМ: купить · ПКМ: продать");
+        TEXTS.put("nav.openHint", "Нажмите на товар, чтобы открыть");
         TEXTS.put("nav.page", "Страница");
 
         TEXTS.put("my.claimTitle", "Готово к получению");
@@ -169,6 +206,8 @@ public final class UiConfig {
         TEXTS.put("empty.sellBuy", "/ah buy или /ah sell");
         TEXTS.put("empty.searchTitle", "◆ Ничего не найдено");
         TEXTS.put("empty.searchBody", "Товар пока не торгуется.");
+        TEXTS.put("empty.filterTitle", "В этой категории пока пусто");
+        TEXTS.put("empty.filterBody", "Выберите другую категорию или откройте все товары.");
 
         TEXTS.put("bar.bought", "Куплено: {q} шт. за {a}");
         TEXTS.put("bar.sold", "Продано: {q} шт. за {a}");
@@ -223,11 +262,11 @@ public final class UiConfig {
         TEXTS.put("draft.quantityNote", "Сделка откроется заново.");
         TEXTS.put("draft.priceNote", "Заявка откроется заново.");
 
-        TEXTS.put("onboarding.1", "ЛКМ по товару — купить.");
-        TEXTS.put("onboarding.2", "ПКМ по товару — продать.");
+        TEXTS.put("onboarding.1", "Нажмите на товар, чтобы увидеть цены и доступные действия.");
+        TEXTS.put("onboarding.2", "Покупка и продажа теперь выбираются отдельными кнопками.");
         TEXTS.put("onboarding.help", "[Помощь]");
-        TEXTS.put("tutorial.1", "«Купить/Продать сейчас» — по рынку.");
-        TEXTS.put("tutorial.2", "«Своя цена» — заявка-ожидание.");
+        TEXTS.put("tutorial.1", "Откройте товар и выберите покупку или продажу.");
+        TEXTS.put("tutorial.2", "«Своя цена» создаёт заявку, которая будет ждать подходящего предложения.");
         TEXTS.put("tutorial.commands", "[Подробные команды]");
         TEXTS.put("searchHelp.title", "Поиск по названию предмета:");
         TEXTS.put("searchHelp.command", "[/ah search ...]");
@@ -240,14 +279,16 @@ public final class UiConfig {
     }
 
     static {
-        LORE.put("card", List.of(
-                "value:card.buy", "value:card.sell", "value:card.trade",
-                "empty", "text:card.hintBuy@success", "text:card.hintSell@sell"));
-        LORE.put("instant", List.of(
+        LORE.put("catalogCard", List.of(
+                "value:catalog.buy", "value:catalog.sell", "empty", "value:catalog.open"));
+        LORE.put("product", List.of(
+                "title:product.title", "value:product.buy", "value:product.sell",
+                "value:product.last", "value:product.available"));
+        LORE.put("tradeNow", List.of(
                 "title:instant.action", "value:instant.price", "value:instant.quantity",
                 "value:instant.partial", "value:instant.total", "value:instant.worst",
                 "value:instant.offers"));
-        LORE.put("editor", List.of(
+        LORE.put("tradeLimit", List.of(
                 "title:editor.action", "value:editor.quantity", "value:editor.price",
                 "value:editor.reserve", "value:editor.available", "value:editor.reserveNote"));
         LORE.put("myClaim", List.of(
@@ -276,9 +317,12 @@ public final class UiConfig {
         BUTTONS.put("ownPrice", new ButtonCfg(Items.CLOCK, null, "instant.ownPriceLore"));
         BUTTONS.put("buyNow", new ButtonCfg(Items.EMERALD, null, "instant.buyNowLore"));
         BUTTONS.put("sellNow", new ButtonCfg(Items.HOPPER, null, "instant.sellNowLore"));
+        BUTTONS.put("productBuy", new ButtonCfg(Items.EMERALD, null, null));
+        BUTTONS.put("productSell", new ButtonCfg(Items.HOPPER, null, null));
+        BUTTONS.put("productSellDisabled", new ButtonCfg(Items.BARRIER,
+                "product.sellDisabled", "product.sellDisabledLore"));
         BUTTONS.put("disabledOffers", new ButtonCfg(Items.BARRIER, "instant.offers", null));
         BUTTONS.put("priceInfo", new ButtonCfg(Items.COMPARATOR, "editor.changePrice", "editor.changePriceLore"));
-        BUTTONS.put("modeNow", new ButtonCfg(Items.CLOCK, null, "editor.nowLore"));
         BUTTONS.put("submitLimit", new ButtonCfg(Items.WRITABLE_BOOK, "editor.submit", "editor.submitLore"));
         BUTTONS.put("quantityAll", new ButtonCfg(Items.BARREL, null, "button.quantityAllLore"));
         BUTTONS.put("quantityOther", new ButtonCfg(Items.WRITABLE_BOOK, null, "button.quantityOtherLore"));

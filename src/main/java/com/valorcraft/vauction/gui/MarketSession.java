@@ -29,6 +29,7 @@ final class MarketSession {
     boolean executing;
     boolean immediate;
     boolean searchActive;
+    MarketFilter filter = MarketFilter.ALL;
     AuctionReadService.ImmediateQuote quote;
     SimpleContainer contents;
     ServerChestMenu menu;

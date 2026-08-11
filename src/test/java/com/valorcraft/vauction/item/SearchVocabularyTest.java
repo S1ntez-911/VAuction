@@ -64,4 +64,13 @@ class SearchVocabularyTest {
         assertTrue(groups.stream().anyMatch(g -> g.contains("copper")));
         assertTrue(groups.stream().anyMatch(g -> g.contains("слиток")));
     }
+
+    @Test
+    void catalogueCategoriesExpandToUsefulBoundedAliases() {
+        assertTrue(SearchVocabulary.groups("resources").get(0).contains("ore"));
+        assertTrue(SearchVocabulary.groups("food").get(0).contains("meat"));
+        assertTrue(SearchVocabulary.groups("tools").get(0).contains("hammer"));
+        assertTrue(SearchVocabulary.groups("machines").get(0).contains("circuit"));
+        assertTrue(SearchVocabulary.groups("machines").get(0).size() <= SearchVocabulary.MAX_ALIASES);
+    }
 }

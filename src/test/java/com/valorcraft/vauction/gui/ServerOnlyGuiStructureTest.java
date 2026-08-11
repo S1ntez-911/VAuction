@@ -64,8 +64,11 @@ class ServerOnlyGuiStructureTest {
                 "private static int helpCommands");
         assertTrue(main.contains("Как купить:"), "help must explain the game, not the command tree");
         assertTrue(main.contains("Как продать:"));
-        assertTrue(main.contains("ЛКМ"));
-        assertTrue(main.contains("ПКМ"));
+        assertTrue(main.contains("нажмите на товар"));
+        assertTrue(main.contains("«Купить»"));
+        assertTrue(main.contains("«Продать»"));
+        assertFalse(main.contains("ЛКМ"));
+        assertFalse(main.contains("ПКМ"));
         assertTrue(main.contains("Своя цена:"));
         assertTrue(main.contains("Моё:"));
         assertTrue(main.contains("Открыть биржу"));
@@ -209,15 +212,16 @@ class ServerOnlyGuiStructureTest {
     }
 
     @Test
-    void realMarketItemsUseNativeSafeDecoratorAndMenuIsOpenedOnlyOnce() throws Exception {
+    void guiUsesCleanCardsWhileRealItemIdentityStaysInActions() throws Exception {
         String controller = source("com/valorcraft/vauction/gui/MarketController.java");
         String items = source("com/valorcraft/vauction/gui/GuiItems.java");
-        assertTrue(controller.contains("GuiItems.decorateMarketItem(visual"));
-        assertTrue(items.contains("result = source.copy()"));
-        assertTrue(items.contains("getList(\"Lore\""));
-        assertFalse(items.substring(items.indexOf("decorateMarketItem")).contains("setHoverName"));
-        assertFalse(items.substring(items.indexOf("decorateMarketItem")).contains("MarketText.brand()"),
-                "branding must not repeat on every catalogue card");
+        assertTrue(controller.contains("GuiItems.marketDisplay(visual"));
+        assertTrue(controller.contains("GuiAction.product(visual)"),
+                "the exact real stack must stay in the action, separate from its clean display card");
+        assertTrue(items.contains("new ItemStack(safeIcon)"));
+        assertTrue(items.contains("realItem.getHoverName().copy()"));
+        assertFalse(controller.contains("GuiItems.decorateMarketItem(visual"),
+                "real TFG items add oversized chemical tooltips on the client");
         assertEquals(1, controller.split("player\\.openMenu", -1).length - 1);
     }
 
@@ -244,9 +248,9 @@ class ServerOnlyGuiStructureTest {
     void catalogueAndBottomRowsUseOneFixedSpatialGrammar() throws Exception {
         String controller = source("com/valorcraft/vauction/gui/MarketController.java");
         assertTrue(controller.contains("NAV_PREVIOUS = 45"));
-        assertTrue(controller.contains("NAV_SEARCH = 47"));
+        assertTrue(controller.contains("NAV_SEARCH = 51"));
         assertTrue(controller.contains("NAV_INFO = 49"));
-        assertTrue(controller.contains("NAV_MY = 51"));
+        assertTrue(controller.contains("NAV_MY = 52"));
         assertTrue(controller.contains("NAV_NEXT = 53"));
         assertTrue(controller.contains("TRADE_BACK = 45"));
         assertTrue(controller.contains("TRADE_SECONDARY = 47"));
@@ -257,9 +261,14 @@ class ServerOnlyGuiStructureTest {
         assertTrue(controller.contains("uiButton(buy ? \"buyNow\" : \"sellNow\""));
         assertTrue(controller.contains("uiButton(\"submitLimit\""));
         assertTrue(controller.contains("uiButton(\"ownPrice\""), "mode switch on the immediate screen");
-        assertTrue(controller.contains("uiButton(\"modeNow\""), "mode switch on the limit screen");
+        assertFalse(controller.contains("uiButton(\"modeNow\""),
+                "the limit screen must not add a redundant mode switch");
         assertTrue(controller.contains("put(box, s, NAV_INFO"));
         assertTrue(controller.contains("MarketIcons.INFO_BOOK"), "info slot must not use raw materials");
+        assertTrue(controller.contains("filterButton(box, s, 46, MarketFilter.RESOURCES)"));
+        assertTrue(controller.contains("filterButton(box, s, 47, MarketFilter.FOOD)"));
+        assertTrue(controller.contains("filterButton(box, s, 48, MarketFilter.TOOLS)"));
+        assertTrue(controller.contains("filterButton(box, s, 50, MarketFilter.MACHINES)"));
     }
 
     @Test
@@ -365,14 +374,16 @@ class ServerOnlyGuiStructureTest {
     }
 
     @Test
-    void catalogueClickIntentOpensTradeWithoutLegacyMarketScreen() throws Exception {
+    void catalogueClickOpensExplicitProductChoiceWithoutHiddenMouseModes() throws Exception {
         String controller = source("com/valorcraft/vauction/gui/MarketController.java");
         String actions = source("com/valorcraft/vauction/gui/GuiAction.java");
-        assertTrue(actions.contains("OPEN_TRADE"));
+        assertTrue(actions.contains("OPEN_PRODUCT"));
         assertFalse(actions.contains("OPEN_MARKET"));
-        assertTrue(controller.contains("button == 1 ? OrderSide.SELL : OrderSide.BUY"));
-        assertTrue(controller.contains("\"card.hintBuy\""));
-        assertTrue(controller.contains("\"card.hintSell\""));
+        assertFalse(controller.contains("button == 1 ? OrderSide.SELL : OrderSide.BUY"));
+        assertTrue(controller.contains("private void renderProduct"));
+        assertTrue(controller.contains("PRODUCT_BUY"));
+        assertTrue(controller.contains("PRODUCT_SELL"));
+        assertTrue(controller.contains("uiButton(\"productSellDisabled\""));
         assertFalse(controller.contains("private void renderMarket("));
         assertFalse(controller.contains("private static void levelItems("));
     }
@@ -388,7 +399,9 @@ class ServerOnlyGuiStructureTest {
         assertTrue(controller.contains("private void renderImmediateQuote"));
         assertTrue(controller.contains("private void renderEditor"));
         assertTrue(controller.contains("uiButton(\"ownPrice\""));
-        assertTrue(controller.contains("UiConfig.text(\"editor.submit\")"));
+        assertTrue(controller.contains("\"editor.submitBuy\""));
+        assertTrue(controller.contains("\"editor.submitSell\""));
+        assertTrue(controller.contains("\"editor.submitSummary\""));
         assertTrue(controller.contains("confirmOrder(player, s);"), "normal limit submission has no mandatory confirmation page");
         assertTrue(controller.contains("createBuyOrder(player.getUUID(), s.unit"));
         assertTrue(controller.contains("createSellOrderFromInventory(player, s.unit"));
@@ -452,10 +465,12 @@ class ServerOnlyGuiStructureTest {
     void catalogueCardsUseActionLabelsAndHumanStatuses() throws Exception {
         String controller = source("com/valorcraft/vauction/gui/MarketController.java");
         String ui = source("com/valorcraft/vauction/gui/UiConfig.java");
-        assertTrue(controller.contains("\"card.buy\""),
+        assertTrue(controller.contains("\"catalog.buy\""),
                 "card price labels must not collide with the action button name");
-        assertTrue(controller.contains("\"card.sell\""));
-        assertTrue(controller.contains("\"card.trade\""));
+        assertTrue(controller.contains("\"catalog.sell\""));
+        assertTrue(controller.contains("\"catalog.open\""));
+        assertTrue(controller.contains("\"product.last\""));
+        assertTrue(controller.contains("\"product.available\""));
         assertFalse(controller.contains("labelValue(\"Купить сейчас\""));
         assertFalse(controller.contains("labelValue(\"Продать сейчас\""));
         assertTrue(ui.contains("my.waitSell"));

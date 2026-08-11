@@ -7,7 +7,7 @@ import java.util.UUID;
 record GuiAction(Type type, int number, long amount, UUID orderId, long deliveryId,
                  ItemStack item) {
     enum Type {
-        HOME, BROWSE, HELP, SEARCH_HELP, MY, OPEN_TRADE, PAGE,
+        HOME, BROWSE, HELP, SEARCH_HELP, MY, OPEN_PRODUCT, PAGE, FILTER,
         BUY_NOW, SELL_NOW, BUY, SELL, ADJUST_QUANTITY, SET_QUANTITY, SET_MAX_QUANTITY,
         REVIEW, CONFIRM_IMMEDIATE, CONFIRM_ORDER, MANAGE_ORDER, PREPARE_CANCEL, CONFIRM_CANCEL, CLAIM, BACK,
         EXACT_QUANTITY, EXACT_PRICE
@@ -25,8 +25,8 @@ record GuiAction(Type type, int number, long amount, UUID orderId, long delivery
         return number(Type.SET_QUANTITY, quantity);
     }
 
-    static GuiAction trade(ItemStack item) {
-        return new GuiAction(Type.OPEN_TRADE, 0, 0, null, 0, item.copy());
+    static GuiAction product(ItemStack item) {
+        return new GuiAction(Type.OPEN_PRODUCT, 0, 0, null, 0, item.copy());
     }
 
     static GuiAction order(Type type, UUID orderId) {

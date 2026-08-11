@@ -69,4 +69,19 @@ class GuiItemsTest {
                 new ItemStackCodec(262_144, 2_097_152));
         assertEquals(keys.keyOf(original), keys.keyOf(cleanStoredUnit));
     }
+
+    @Test
+    void cleanMarketDisplayDoesNotCarryClientMaterialTooltipData() {
+        ItemStack real = new ItemStack(Items.GLOWSTONE);
+        real.setHoverName(Component.literal("Светокамень"));
+        real.getOrCreateTag().putString("ChemicalFormula", "oversized-client-tooltip");
+
+        ItemStack display = GuiItems.marketDisplay(real, Items.ITEM_FRAME,
+                List.of(Component.literal("Купить сейчас: 5.0")));
+
+        assertEquals(Items.ITEM_FRAME, display.getItem());
+        assertEquals("Светокамень", display.getHoverName().getString());
+        assertTrue(display.getTag() == null || !display.getTag().contains("ChemicalFormula"));
+        assertEquals("oversized-client-tooltip", real.getTag().getString("ChemicalFormula"));
+    }
 }

@@ -268,11 +268,11 @@ final class MarketCommands {
                 .withStyle(ChatFormatting.GRAY), false);
         source.sendSuccess(() -> Component.literal("").withStyle(ChatFormatting.GRAY), false);
         source.sendSuccess(() -> Component.literal("Как купить:").withStyle(ChatFormatting.YELLOW), false);
-        source.sendSuccess(() -> Component.literal("Откройте /ah и нажмите ЛКМ по нужному товару. Выберите количество и нажмите «Купить сейчас».")
+        source.sendSuccess(() -> Component.literal("Откройте /ah, нажмите на товар и выберите «Купить». Затем укажите количество и подтвердите покупку.")
                 .withStyle(ChatFormatting.GRAY), false);
         source.sendSuccess(() -> Component.literal("").withStyle(ChatFormatting.GRAY), false);
         source.sendSuccess(() -> Component.literal("Как продать:").withStyle(ChatFormatting.YELLOW), false);
-        source.sendSuccess(() -> Component.literal("Нажмите ПКМ по товару. Выберите количество и нажмите «Продать сейчас».")
+        source.sendSuccess(() -> Component.literal("Откройте товар и выберите «Продать». Биржа сразу покажет цену, количество и итог.")
                 .withStyle(ChatFormatting.GRAY), false);
         source.sendSuccess(() -> Component.literal("").withStyle(ChatFormatting.GRAY), false);
         source.sendSuccess(() -> Component.literal("Своя цена:").withStyle(ChatFormatting.YELLOW), false);

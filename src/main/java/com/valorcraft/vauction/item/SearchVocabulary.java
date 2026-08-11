@@ -66,7 +66,11 @@ public final class SearchVocabulary {
             Map.entry("свёкла", List.of("beetroot")),
             Map.entry("яблоко", List.of("apple")),
             Map.entry("семена", List.of("seeds")),
-            Map.entry("рыба", List.of("fish")));
+            Map.entry("рыба", List.of("fish")),
+            Map.entry("resources", List.of("ingot", "ore", "dust", "plate")),
+            Map.entry("food", List.of("bread", "meat", "fruit", "vegetable")),
+            Map.entry("tools", List.of("pickaxe", "hammer", "saw", "wrench")),
+            Map.entry("machines", List.of("machine", "casing", "motor", "circuit")));
 
     private SearchVocabulary() {}
 

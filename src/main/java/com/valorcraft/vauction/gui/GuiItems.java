@@ -6,6 +6,7 @@ import net.minecraft.nbt.ListTag;
 import net.minecraft.nbt.StringTag;
 import net.minecraft.network.chat.Component;
 import net.minecraft.world.item.ItemStack;
+import net.minecraft.world.item.Item;
 
 import java.util.List;
 
@@ -50,6 +51,19 @@ final class GuiItems {
         lore.add(StringTag.valueOf(Component.Serializer.toJson(MarketText.divider())));
         display.put("Lore", lore);
         return result;
+    }
+
+    /**
+     * Server-only safe market card. TFG/GT clients append large chemical formulae to
+     * real material stacks after the server has built their lore; a neutral vanilla
+     * icon is therefore the only reliable way to keep the auction tooltip readable.
+     * The real stack remains in GuiAction/MarketSession and is never replaced in the
+     * order identity or delivery path.
+     */
+    static ItemStack marketDisplay(ItemStack realItem, Item safeIcon, List<Component> marketLines) {
+        Component name = realItem == null || realItem.isEmpty()
+                ? Component.literal("Неизвестный предмет") : realItem.getHoverName().copy();
+        return namedButton(new ItemStack(safeIcon), name, marketLines);
     }
 
     static void setLore(ItemStack stack, List<String> lines) {
