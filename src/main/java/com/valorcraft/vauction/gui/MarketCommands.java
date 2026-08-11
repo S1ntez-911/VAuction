@@ -27,6 +27,7 @@ import net.minecraft.server.level.ServerPlayer;
 import net.minecraft.world.item.ItemStack;
 import net.minecraftforge.event.RegisterCommandsEvent;
 
+import java.math.BigDecimal;
 import java.util.UUID;
 import java.util.concurrent.CompletableFuture;
 
@@ -54,17 +55,17 @@ final class MarketCommands {
                                 .executes(ctx -> search(ctx.getSource(), StringArgumentType.getString(ctx, "text")))))
                 .then(Commands.literal("set")
                         .requires(MarketCommands::inputDraftActive)
-                        .then(Commands.argument("value", LongArgumentType.longArg(1))
+                        .then(Commands.argument("value", StringArgumentType.word())
                                 .suggests(MarketCommands::suggestDraftInput)
                                 .executes(ctx -> setExact(ctx.getSource(),
-                                        LongArgumentType.getLong(ctx, "value")))))
+                                        StringArgumentType.getString(ctx, "value")))))
                 .then(Commands.literal("sell").executes(ctx -> helpSell(ctx.getSource()))
-                        .then(Commands.argument("price", LongArgumentType.longArg(1))
+                        .then(Commands.argument("price", StringArgumentType.word())
                                 .suggests(MarketCommands::suggestPrices)
-                                .executes(ctx -> sell(ctx.getSource(), LongArgumentType.getLong(ctx, "price"), null))
+                                .executes(ctx -> sell(ctx.getSource(), StringArgumentType.getString(ctx, "price"), null))
                                 .then(Commands.argument("quantity", IntegerArgumentType.integer(1))
                                         .suggests(MarketCommands::suggestQuantities)
-                                        .executes(ctx -> sell(ctx.getSource(), LongArgumentType.getLong(ctx, "price"),
+                                        .executes(ctx -> sell(ctx.getSource(), StringArgumentType.getString(ctx, "price"),
                                                 IntegerArgumentType.getInteger(ctx, "quantity"))))))
                 .then(Commands.literal("buy").executes(ctx -> helpBuy(ctx.getSource()))
                         .then(Commands.argument("item", ItemArgument.item(context))
@@ -72,10 +73,10 @@ final class MarketCommands {
                                 .then(Commands.argument("quantity", IntegerArgumentType.integer(1))
                                         .suggests(MarketCommands::suggestCommonQuantities)
                                         .executes(ctx -> helpBuy(ctx.getSource()))
-                                        .then(Commands.argument("maxPrice", LongArgumentType.longArg(1))
+                                        .then(Commands.argument("maxPrice", StringArgumentType.word())
                                                 .suggests(MarketCommands::suggestPrices)
                                                 .executes(ctx -> buy(ctx, IntegerArgumentType.getInteger(ctx, "quantity"),
-                                                        LongArgumentType.getLong(ctx, "maxPrice")))))))
+                                                        StringArgumentType.getString(ctx, "maxPrice")))))))
                 .then(Commands.literal("orders").executes(ctx -> orders(ctx.getSource())))
                 .then(Commands.literal("cancel").executes(ctx -> helpCommands(ctx.getSource()))
                         .then(Commands.argument("orderId", StringArgumentType.word())
@@ -132,9 +133,29 @@ final class MarketCommands {
      * {@code requires} until the player owns an input draft, then applies
      * QUANTITY or PRICE depending on which GUI flow started the draft.
      */
-    private static int setExact(CommandSourceStack source, long value) {
+    private static int setExact(CommandSourceStack source, String text) {
         ServerPlayer player = player(source);
         if (player == null) return 0;
+        TradeDraft draft = MarketController.instance().inputDraft(player.getUUID());
+        if (draft == null) {
+            return fail(source, "Сначала нажмите «Другое» или «Изменить цену» в /ah.");
+        }
+        final long value;
+        if (draft.expectedInput == TradeDraft.InputTarget.PRICE) {
+            try {
+                value = CurrencyInput.parse(text);
+            } catch (CurrencyInput.InvalidPrice e) {
+                return fail(source, e.getMessage());
+            }
+        } else {
+            try {
+                if (!text.matches("[0-9]+")) throw new NumberFormatException();
+                value = Integer.parseInt(text);
+                if (value <= 0) throw new NumberFormatException();
+            } catch (NumberFormatException e) {
+                return fail(source, "Количество должно быть целым числом больше нуля.");
+            }
+        }
         if (!MarketController.instance().setExact(player, value)) {
             return fail(source, "Сначала нажмите «Другое» или «Изменить цену» в /ah.");
         }
@@ -160,9 +181,9 @@ final class MarketCommands {
                             .availableCount(player.getUUID(), draft.unit);
                     if (available > 0) builder.suggest(available, Component.literal("все доступные"));
                 } else {
-                    builder.suggest(1);
-                    builder.suggest(100);
-                    builder.suggest(1000);
+                    suggestPrice(builder, 1, "минимальная цена");
+                    suggestPrice(builder, majorUnits(1), null);
+                    suggestPrice(builder, majorUnits(10), null);
                 }
             }
         }
@@ -176,9 +197,11 @@ final class MarketCommands {
         return 1;
     }
 
-    private static int sell(CommandSourceStack source, long price, Integer requestedQuantity) {
+    private static int sell(CommandSourceStack source, String priceText, Integer requestedQuantity) {
         ServerPlayer player = player(source);
         if (player == null || !ready(source)) return 0;
+        long price = parsePrice(source, priceText);
+        if (price <= 0) return 0;
         ItemStack unit = player.getMainHandItem();
         if (unit.isEmpty()) return fail(source, "Возьмите продаваемый предмет в основную руку.");
         unit = unit.copy();
@@ -193,11 +216,13 @@ final class MarketCommands {
                 UUID.randomUUID()));
     }
 
-    private static int buy(CommandContext<CommandSourceStack> ctx, int quantity, long maxPrice)
+    private static int buy(CommandContext<CommandSourceStack> ctx, int quantity, String priceText)
             throws com.mojang.brigadier.exceptions.CommandSyntaxException {
         CommandSourceStack source = ctx.getSource();
         ServerPlayer player = player(source);
         if (player == null || !ready(source)) return 0;
+        long maxPrice = parsePrice(source, priceText);
+        if (maxPrice <= 0) return 0;
         ItemStack unit = ItemArgument.getItem(ctx, "item").createItemStack(1, false);
         return outcome(source, VAuctionCore.instance().auctionService().createBuyOrder(
                 player.getUUID(), unit, maxPrice, quantity, UUID.randomUUID()));
@@ -274,6 +299,8 @@ final class MarketCommands {
         helpLine(source, "/ah search <название>", "найти товар");
         helpLine(source, "/ah sell <цена> [количество]", "создать заявку на продажу предмета из руки");
         helpLine(source, "/ah buy <предмет> <количество> <цена>", "создать заявку на покупку");
+        source.sendSuccess(() -> Component.literal("Пример цены: " + CurrencyInput.example())
+                .withStyle(ChatFormatting.GRAY), false);
         source.sendSuccess(() -> Component.literal("Остальное делается в меню: /ah и «Моё».")
                 .withStyle(ChatFormatting.GRAY), false);
         return 1;
@@ -282,12 +309,16 @@ final class MarketCommands {
     private static int helpSell(CommandSourceStack source) {
         helpLine(source, "/ah sell <цена> [количество]",
                 "заявка на продажу точного предмета из основной руки; без количества — все совпадающие предметы");
+        source.sendSuccess(() -> Component.literal("Пример: /ah sell " + CurrencyInput.example() + " 1")
+                .withStyle(ChatFormatting.GRAY), false);
         return 1;
     }
 
     private static int helpBuy(CommandSourceStack source) {
         helpLine(source, "/ah buy <предмет> <количество> <цена>",
                 "заявка на покупку обычного предмета; точный вариант с особыми свойствами выбирайте в GUI");
+        source.sendSuccess(() -> Component.literal("Пример: /ah buy minecraft:stone 1 " + CurrencyInput.example())
+                .withStyle(ChatFormatting.GRAY), false);
         return 1;
     }
 
@@ -360,15 +391,45 @@ final class MarketCommands {
             if (!unit.isEmpty()) {
                 MarketSummary summary = VAuctionCore.instance().auctionService().summary(unit);
                 if (summary != null) {
-                    if (summary.bestAsk() > 0) builder.suggest(Long.toString(summary.bestAsk()), Component.literal("лучшая продажа"));
-                    if (summary.bestBid() > 0) builder.suggest(Long.toString(summary.bestBid()), Component.literal("лучшая покупка"));
-                    if (summary.lastTradePrice() > 0) builder.suggest(Long.toString(summary.lastTradePrice()), Component.literal("последняя сделка"));
+                    if (summary.bestAsk() > 0) suggestPrice(builder, summary.bestAsk(), "лучшая продажа");
+                    if (summary.bestBid() > 0) suggestPrice(builder, summary.bestBid(), "лучшая покупка");
+                    if (summary.lastTradePrice() > 0) suggestPrice(builder, summary.lastTradePrice(), "последняя сделка");
                 }
             }
         }
-        builder.suggest(1, Component.literal("минимальная цена"));
-        builder.suggest(100); builder.suggest(1000); builder.suggest(10000);
+        suggestPrice(builder, 1, "минимальная цена");
+        suggestPrice(builder, majorUnits(1), null);
+        suggestPrice(builder, majorUnits(10), null);
+        suggestPrice(builder, majorUnits(100), null);
         return builder.buildFuture();
+    }
+
+    private static long parsePrice(CommandSourceStack source, String text) {
+        try {
+            return CurrencyInput.parse(text);
+        } catch (CurrencyInput.InvalidPrice e) {
+            fail(source, e.getMessage());
+            return -1;
+        }
+    }
+
+    private static long majorUnits(long amount) {
+        try {
+            return Math.multiplyExact(amount, BigDecimal.TEN.pow(CurrencyText.decimalPlaces()).longValueExact());
+        } catch (ArithmeticException | IllegalStateException e) {
+            return amount;
+        }
+    }
+
+    private static void suggestPrice(SuggestionsBuilder builder, long minor, String tooltip) {
+        final String value;
+        try {
+            value = CurrencyInput.formatAmount(minor);
+        } catch (IllegalStateException e) {
+            return;
+        }
+        if (tooltip == null) builder.suggest(value);
+        else builder.suggest(value, Component.literal(tooltip));
     }
 
     private static int outcome(CommandSourceStack source, AuctionService.Outcome result) {

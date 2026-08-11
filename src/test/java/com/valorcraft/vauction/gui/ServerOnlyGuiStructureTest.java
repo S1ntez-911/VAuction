@@ -39,6 +39,22 @@ class ServerOnlyGuiStructureTest {
         assertFalse(commands.contains("literal(\"quantity\")"),
                 "per-field commands must not leak into the public tree");
         assertFalse(commands.contains("literal(\"price\")"));
+        assertTrue(commands.contains("draft.expectedInput == TradeDraft.InputTarget.PRICE"));
+        assertTrue(commands.contains("CurrencyInput.parse(text)"),
+                "price drafts must accept human-readable decimal currency");
+        assertTrue(commands.contains("Integer.parseInt(text)"),
+                "quantity drafts must remain integer-only");
+    }
+
+    @Test
+    void sellAndBuyPricesUseTheSharedCurrencyBoundaryParser() throws Exception {
+        String commands = source("com/valorcraft/vauction/gui/MarketCommands.java");
+        assertTrue(commands.contains("Commands.argument(\"price\", StringArgumentType.word())"));
+        assertTrue(commands.contains("Commands.argument(\"maxPrice\", StringArgumentType.word())"));
+        assertTrue(commands.contains("sell(ctx.getSource(), StringArgumentType.getString(ctx, \"price\")"));
+        assertTrue(commands.contains("StringArgumentType.getString(ctx, \"maxPrice\")"));
+        assertFalse(commands.contains("Commands.argument(\"price\", LongArgumentType"));
+        assertFalse(commands.contains("Commands.argument(\"maxPrice\", LongArgumentType"));
     }
 
     @Test
