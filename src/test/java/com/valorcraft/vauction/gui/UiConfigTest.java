@@ -159,6 +159,31 @@ class UiConfigTest {
     }
 
     @Test
+    void newCatalogueButtonsUseFreeSlotsWithoutBreakingExistingFiveRowLayout() throws Exception {
+        UiConfig.start(temp);
+        JsonObject root = read("screens.json");
+        root.getAsJsonObject("screens").getAsJsonObject("catalogue").addProperty("rows", 5);
+        JsonObject catalogue = root.getAsJsonObject("layouts").getAsJsonObject("catalogue");
+        com.google.gson.JsonArray content = new com.google.gson.JsonArray();
+        for (int slot = 0; slot < 36; slot++) content.add(slot);
+        catalogue.add("content", content);
+        catalogue.addProperty("previous", 36);
+        catalogue.addProperty("categories", 37);
+        catalogue.add("search", com.google.gson.JsonNull.INSTANCE);
+        catalogue.add("info", com.google.gson.JsonNull.INSTANCE);
+        catalogue.addProperty("my", 41);
+        catalogue.addProperty("next", 44);
+        catalogue.remove("refresh");
+        catalogue.remove("help");
+        write("screens.json", root);
+
+        assertNull(UiConfig.reload());
+        assertEquals(40, UiConfig.slot("catalogue", "refresh"));
+        assertEquals(42, UiConfig.slot("catalogue", "help"));
+        assertTrue(read("screens.json").getAsJsonObject("layouts").getAsJsonObject("catalogue").has("refresh"));
+    }
+
+    @Test
     void rowReductionRejectsSlotsOutsideNewCapacityAndKeepsPreviousSnapshot() throws Exception {
         UiConfig.start(temp);
         JsonObject root = read("screens.json");

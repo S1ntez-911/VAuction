@@ -182,6 +182,7 @@ public final class MarketController {
             case HOME -> { s.screen = MarketScreen.BROWSE; s.cataloguePage = 0; s.search = ""; s.searchActive = false; s.filter = MarketFilter.ALL;
                 s.orderSide = null; s.inventorySlot = -1; renderMarkets(player, s); }
             case BROWSE -> { s.screen = MarketScreen.BROWSE; s.cataloguePage = 0; s.search = ""; s.searchActive = false; s.filter = MarketFilter.ALL; renderMarkets(player, s); }
+            case REFRESH -> { MarketSounds.page(player); renderMarkets(player, s); }
             case HELP -> tutorial(player);
             case SEARCH_HELP -> searchHelp(player);
             case OPEN_FILTERS -> { MarketSounds.navigation(player); renderCategories(player, s); }
@@ -1005,11 +1006,15 @@ public final class MarketController {
                         MarketText.action(UiConfig.text("button.categories"), MarketPalette.byKey("brand")),
                         List.of(MarketText.muted(UiConfig.fmt("button.categoriesCurrent", "category", category)))),
                 GuiAction.simple(GuiAction.Type.OPEN_FILTERS));
+        put(box, s, UiConfig.slot("catalogue", "refresh"), uiButton(s, "refresh", null, null),
+                GuiAction.simple(GuiAction.Type.REFRESH));
         put(box, s, UiConfig.slot("catalogue", "search"), uiButton(s, "search", null, null),
                 GuiAction.simple(GuiAction.Type.SEARCH_HELP));
         catalogueInfo(box, s, page);
         put(box, s, UiConfig.slot("catalogue", "my"), uiButton(s, "my", null, null),
                 GuiAction.simple(GuiAction.Type.MY));
+        put(box, s, UiConfig.slot("catalogue", "help"), uiButton(s, "help", null, null),
+                GuiAction.simple(GuiAction.Type.HELP));
     }
 
     private void renderCategories(ServerPlayer player, MarketSession s) {

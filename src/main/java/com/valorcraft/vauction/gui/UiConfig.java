@@ -218,6 +218,10 @@ public final class UiConfig {
         TEXTS.put("button.searchLore", "Искать по названию");
         TEXTS.put("button.categories", "Разделы");
         TEXTS.put("button.categoriesCurrent", "Сейчас: {category}");
+        TEXTS.put("button.refresh", "Обновить каталог");
+        TEXTS.put("button.refreshLore", "Проверить новые товары и цены");
+        TEXTS.put("button.help", "Как пользоваться биржей");
+        TEXTS.put("button.helpLore", "Краткая инструкция в чате");
         TEXTS.put("button.newSearch", "Новый поиск");
         TEXTS.put("button.newSearchLore", "Уточнить запрос");
         TEXTS.put("button.catalogue", "Каталог");
@@ -386,6 +390,8 @@ public final class UiConfig {
         BUTTONS.put("my", new ButtonCfg(Items.ENDER_CHEST, "button.my", "nav.ordersHint"));
         BUTTONS.put("search", new ButtonCfg(Items.COMPASS, "button.search", "button.searchLore"));
         BUTTONS.put("categories", new ButtonCfg(Items.BOOK, "button.categories", null));
+        BUTTONS.put("refresh", new ButtonCfg(Items.CLOCK, "button.refresh", "button.refreshLore"));
+        BUTTONS.put("help", new ButtonCfg(Items.KNOWLEDGE_BOOK, "button.help", "button.helpLore"));
         BUTTONS.put("newSearch", new ButtonCfg(Items.COMPASS, "button.newSearch", "button.newSearchLore"));
         BUTTONS.put("catalogue", new ButtonCfg(Items.CHEST, "button.catalogue", "button.catalogueLore"));
         BUTTONS.put("allGoods", new ButtonCfg(Items.CHEST, "button.allGoods", "button.allGoodsLore"));
@@ -452,7 +458,8 @@ public final class UiConfig {
 
         layout("catalogue",
                 "content", range(0, 45), "empty", 22, "previous", 45,
-                "categories", 46, "search", 48, "info", 49, "my", 50, "next", 53);
+                "categories", 46, "refresh", 47, "search", 48, "info", 49,
+                "my", 50, "help", 51, "next", 53);
         layout("search",
                 "content", range(0, 45), "empty", 22, "previous", 45,
                 "newSearch", 48, "info", 49, "catalogue", 50, "next", 53);
@@ -568,7 +575,13 @@ public final class UiConfig {
                 JsonElement parsed = JsonParser.parseString(Files.readString(path, StandardCharsets.UTF_8));
                 if (!parsed.isJsonObject()) throw new IllegalArgumentException(entry.getKey() + " must contain an object");
                 document = parsed.getAsJsonObject();
+                boolean addRefresh = missingCatalogueLayoutKey(document, "refresh");
+                boolean addHelp = missingCatalogueLayoutKey(document, "help");
                 upgraded = mergeMissing(document, defaultDocument);
+                if ("screens.json".equals(entry.getKey()) && (addRefresh || addHelp)) {
+                    addNewCatalogueControls(document, addRefresh, addHelp);
+                    upgraded = true;
+                }
             }
             if (!document.has("format") || !document.get("format").isJsonPrimitive()
                     || !document.getAsJsonPrimitive("format").isNumber()
@@ -585,6 +598,40 @@ public final class UiConfig {
             if (upgraded) writeJson(path, document);
         }
         return root;
+    }
+
+    private static boolean missingCatalogueLayoutKey(JsonObject document, String key) {
+        JsonObject fileLayouts = obj(document, "layouts");
+        JsonObject catalogue = fileLayouts == null ? null : obj(fileLayouts, "catalogue");
+        return catalogue != null && !catalogue.has(key);
+    }
+
+    /** Adds newly introduced controls only to genuinely free slots in an administrator's existing layout. */
+    private static void addNewCatalogueControls(JsonObject document, boolean addRefresh, boolean addHelp) {
+        JsonObject catalogue = document.getAsJsonObject("layouts").getAsJsonObject("catalogue");
+        int rows = document.getAsJsonObject("screens").getAsJsonObject("catalogue").get("rows").getAsInt();
+        int capacity = rows * 9;
+        Set<Integer> occupied = new java.util.HashSet<>();
+        for (String key : catalogue.keySet()) {
+            if ((addRefresh && "refresh".equals(key)) || (addHelp && "help".equals(key))) continue;
+            JsonElement value = catalogue.get(key);
+            if (value.isJsonPrimitive() && value.getAsJsonPrimitive().isNumber()) occupied.add(value.getAsInt());
+            else if (value.isJsonArray()) for (JsonElement slot : value.getAsJsonArray()) {
+                if (slot.isJsonPrimitive() && slot.getAsJsonPrimitive().isNumber()) occupied.add(slot.getAsInt());
+            }
+        }
+        if (addRefresh) catalogue.add("refresh", freeNear(occupied, capacity, capacity - 5));
+        if (addHelp) catalogue.add("help", freeNear(occupied, capacity, capacity - 3));
+    }
+
+    private static JsonElement freeNear(Set<Integer> occupied, int capacity, int preferred) {
+        for (int distance = 0; distance < capacity; distance++) {
+            int left = preferred - distance;
+            if (left >= 0 && left < capacity && occupied.add(left)) return new JsonPrimitive(left);
+            int right = preferred + distance;
+            if (right >= 0 && right < capacity && occupied.add(right)) return new JsonPrimitive(right);
+        }
+        return com.google.gson.JsonNull.INSTANCE;
     }
 
     private static void writeSplitConfig(JsonObject root) throws java.io.IOException {
