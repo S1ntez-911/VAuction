@@ -121,6 +121,30 @@ class DatabaseTest {
     }
 
     @Test
+    void healthSnapshotCountsStateWithOneBoundedRowQuery() {
+        OrderRepository orderRepository = new OrderRepository();
+        MatchWorkRepository work = new MatchWorkRepository();
+        Order active = Order.newOrder(UUID.randomUUID(), OrderSide.SELL, "health:active",
+                item("minecraft:bread"), 100, 1, 1).build();
+        Order manual = Order.newOrder(UUID.randomUUID(), OrderSide.SELL, "health:manual",
+                item("minecraft:iron_ingot"), 100, 1, 2).build().toManualReview(3);
+        db.inTransaction(c -> {
+            orderRepository.insert(c, active);
+            orderRepository.insert(c, manual);
+            work.registerOrder(c, active.orderId());
+            work.enqueue(c, active.orderId(), 1);
+            return null;
+        });
+
+        AuctionHealthRepository.Snapshot health = db.query(c -> new AuctionHealthRepository().read(c));
+        assertEquals(1, health.activeOrders());
+        assertEquals(1, health.manualReviewOrders());
+        assertEquals(1, health.matchingQueue());
+        assertEquals(1, health.attentionRequired());
+        assertEquals(0, health.recoveryBacklog());
+    }
+
+    @Test
     void guiMarketReadIsBoundedAcrossOneHundredMarkets() {
         OrderRepository orderRepository = new OrderRepository();
         db.inTransaction(c -> {

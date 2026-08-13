@@ -29,6 +29,9 @@ class ServerOnlyGuiStructureTest {
         assertTrue(commands.contains("ItemArgument.item(context)"));
         assertTrue(commands.contains("Commands.literal(\"admin\")"));
         assertTrue(commands.contains("Commands.literal(\"reloadui\")"));
+        assertTrue(commands.contains("Commands.literal(\"health\")"));
+        assertTrue(commands.contains("Commands.literal(\"recover\")"));
+        assertTrue(commands.contains("runRecoverySlice()"));
         assertTrue(commands.contains("source.hasPermission(2)"));
         assertTrue(commands.contains("MarketController.instance().closeAll(source.getServer())"));
     }

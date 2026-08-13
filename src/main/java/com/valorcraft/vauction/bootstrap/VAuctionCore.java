@@ -16,6 +16,7 @@ import com.valorcraft.vauction.item.ItemStackCodec;
 import com.valorcraft.vauction.item.MarketCategoryConfig;
 import com.valorcraft.vauction.item.MarketCategoryClassifier;
 import com.valorcraft.vauction.persistence.MarketCategoryRepository;
+import com.valorcraft.vauction.persistence.AuctionHealthRepository;
 import com.valorcraft.vauction.persistence.BuyOrderRepository;
 import com.valorcraft.vauction.persistence.DatabaseManager;
 import com.valorcraft.vauction.persistence.DeliveryRepository;
@@ -33,6 +34,8 @@ import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
 
 import java.nio.file.Path;
+import com.valorcraft.vauction.application.AuctionWorkLimits;
+import com.valorcraft.vauction.application.WorkBudget;
 
 /**
  * Compose root VAuction: конфиг → проверка VEconomy → БД + миграции → схема → сервисы.
@@ -270,6 +273,19 @@ public final class VAuctionCore {
         if (error != null) return error;
         backfillMarketCategories(database, codec);
         return null;
+    }
+
+    public AuctionHealthRepository.Snapshot health() {
+        if (!isRunning() || database == null) throw new IllegalStateException("Биржа сейчас недоступна.");
+        return database.query(c -> new AuctionHealthRepository().read(c));
+    }
+
+    /** Runs only the same bounded recovery slice used by normal server maintenance. */
+    public RecoveryService.ScanReport runRecoverySlice() {
+        if (!isRunning() || recoveryService == null) throw new IllegalStateException("Биржа сейчас недоступна.");
+        return recoveryService.runtimeSlice(WorkBudget.timed(
+                AuctionWorkLimits.MAX_RUNTIME_RECOVERY_OPERATIONS,
+                AuctionWorkLimits.MAX_MAINTENANCE_NANOS));
     }
 
     public AuctionReadService auctionReadService() {

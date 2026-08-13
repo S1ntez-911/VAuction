@@ -98,7 +98,11 @@ final class MarketCommands {
                         .then(Commands.literal("reloadcategories")
                                 .executes(ctx -> categoryReload(ctx.getSource())))
                         .then(Commands.literal("category")
-                                .executes(ctx -> categoryInfo(ctx.getSource()))))
+                                .executes(ctx -> categoryInfo(ctx.getSource())))
+                        .then(Commands.literal("health")
+                                .executes(ctx -> adminHealth(ctx.getSource())))
+                        .then(Commands.literal("recover")
+                                .executes(ctx -> adminRecover(ctx.getSource()))))
                 .then(Commands.argument("unknown", StringArgumentType.greedyString())
                         .executes(ctx -> help(ctx.getSource())));
     }
@@ -138,6 +142,56 @@ final class MarketCommands {
         String tags = result.tags().isEmpty() ? "нет" : String.join(", ", result.tags());
         source.sendSuccess(() -> Component.literal("Теги: " + tags).withStyle(ChatFormatting.DARK_GRAY), false);
         return 1;
+    }
+
+    private static int adminHealth(CommandSourceStack source) {
+        try {
+            var health = VAuctionCore.instance().health();
+            ChatFormatting stateColor = health.attentionRequired() > 0 ? ChatFormatting.RED
+                    : health.recoveryBacklog() > 0 ? ChatFormatting.YELLOW : ChatFormatting.GREEN;
+            String state = health.attentionRequired() > 0 ? "ТРЕБУЕТ ВНИМАНИЯ"
+                    : health.recoveryBacklog() > 0 ? "ВОССТАНОВЛЕНИЕ ИДЁТ" : "НОРМА";
+            source.sendSuccess(() -> Component.literal("VAuction: " + state).withStyle(stateColor), false);
+            source.sendSuccess(() -> Component.literal("Заявки: активных " + health.activeOrders()
+                    + ", в обработке " + health.processingOrders()
+                    + ", ручная проверка " + health.manualReviewOrders()).withStyle(ChatFormatting.GRAY), false);
+            source.sendSuccess(() -> Component.literal("Сделки: ожидают завершения " + health.pendingTrades()
+                    + ", ручная проверка " + health.manualReviewTrades()).withStyle(ChatFormatting.GRAY), false);
+            source.sendSuccess(() -> Component.literal("Выдача: доступно " + health.claimableDeliveries()
+                    + ", выдаётся " + health.claimingDeliveries()
+                    + ", ошибка " + health.failedDeliveries()).withStyle(ChatFormatting.GRAY), false);
+            source.sendSuccess(() -> Component.literal("Системные операции: выполняются "
+                    + health.runningOperations() + ", ручная проверка " + health.manualReviewOperations()
+                    + "; очередь сопоставления " + health.matchingQueue()).withStyle(ChatFormatting.GRAY), false);
+            if (health.recoveryBacklog() > 0) {
+                source.sendSuccess(() -> Component.literal("[Запустить безопасный проход восстановления]")
+                        .withStyle(style -> style.withColor(ChatFormatting.AQUA)
+                                .withClickEvent(new ClickEvent(ClickEvent.Action.RUN_COMMAND,
+                                        "/ah admin recover"))), false);
+            }
+            return 1;
+        } catch (RuntimeException e) {
+            return fail(source, "Не удалось проверить биржу: " + e.getMessage());
+        }
+    }
+
+    private static int adminRecover(CommandSourceStack source) {
+        try {
+            var report = VAuctionCore.instance().runRecoverySlice();
+            source.sendSuccess(() -> Component.literal("Безопасный проход завершён: обработано "
+                    + report.operationsAttempted() + ", завершено сделок " + report.fillsFinished()
+                    + ", восстановлено резервов " + report.escrowsRestored()
+                    + ", изолировано выдач " + report.claimsQuarantined()
+                    + ", отправлено на ручную проверку " + report.ordersInManualReview() + ".")
+                    .withStyle(ChatFormatting.GREEN), false);
+            if (report.backlogRemaining()) {
+                source.sendSuccess(() -> Component.literal("Работа ещё осталась. Она продолжится автоматически; команду можно повторить.")
+                        .withStyle(ChatFormatting.YELLOW), false);
+            }
+            return 1;
+        } catch (RuntimeException e) {
+            return fail(source, "Восстановление не запущено: " + e.getMessage());
+        }
     }
 
     private static int open(CommandSourceStack source) {
