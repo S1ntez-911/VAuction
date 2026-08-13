@@ -298,8 +298,9 @@ public final class MarketController {
         s.screen = s.searchActive ? MarketScreen.SEARCH : MarketScreen.BROWSE;
         String layout = s.screen == MarketScreen.SEARCH ? "search" : "catalogue";
         int[] contentSlots = UiConfig.slots(layout, "content");
-        String query = s.searchActive ? s.search : s.filter.query;
-        Page<MarketCard> page = read().markets(s.cataloguePage, query, contentSlots.length);
+        String query = s.searchActive ? s.search : "";
+        Page<MarketCard> page = read().markets(s.cataloguePage, query, contentSlots.length,
+                s.searchActive ? null : s.filter.category);
         s.cataloguePage = page.page();
         context(player, s,
                 "category", UiConfig.text(s.filter == MarketFilter.ALL ? "filter.all" : s.filter.textKey),

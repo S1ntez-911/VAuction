@@ -210,7 +210,7 @@ class ServerOnlyGuiStructureTest {
         assertTrue(root.contains("renderMarkets(player, session)"));
         assertFalse(root.contains("renderHome"));
         assertTrue(controller.contains("UiConfig.slots(layout, \"content\")"));
-        assertTrue(controller.contains("read().markets(s.cataloguePage, query, contentSlots.length)"));
+        assertTrue(controller.contains("read().markets(s.cataloguePage, query, contentSlots.length,"));
         assertTrue(controller.contains("page.totalPages()"));
     }
 

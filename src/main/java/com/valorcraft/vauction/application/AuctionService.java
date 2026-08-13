@@ -20,10 +20,12 @@ import com.valorcraft.vauction.item.ItemPolicy;
 import com.valorcraft.vauction.item.ItemSnapshot;
 import com.valorcraft.vauction.item.ItemStackCodec;
 import com.valorcraft.vauction.item.MarketKeyStrategy;
+import com.valorcraft.vauction.item.MarketCategoryClassifier;
 import com.valorcraft.vauction.persistence.DatabaseManager;
 import com.valorcraft.vauction.persistence.DatabaseException;
 import com.valorcraft.vauction.persistence.DeliveryRepository;
 import com.valorcraft.vauction.persistence.MatchWorkRepository;
+import com.valorcraft.vauction.persistence.MarketCategoryRepository;
 import com.valorcraft.vauction.persistence.IocOrderRepository;
 import com.valorcraft.vauction.persistence.OperationRepository;
 import com.valorcraft.vauction.persistence.OrderRepository;
@@ -117,6 +119,7 @@ public final class AuctionService {
     private final DeliveryRepository deliveries;
     private final MatchWorkRepository matchWork = new MatchWorkRepository();
     private final IocOrderRepository iocOrders = new IocOrderRepository();
+    private final MarketCategoryRepository marketCategories = new MarketCategoryRepository();
     private final ItemStackCodec codec;
     private final MarketKeyStrategy marketKeyFactory;
     private final EconomyGateway economy;
@@ -339,6 +342,7 @@ public final class AuctionService {
             order = created;
             database.inTransaction(conn -> {
                 orders.insert(conn, created);
+                marketCategories.upsert(conn, key, MarketCategoryClassifier.classify(unit), now);
                 if (immediate) iocOrders.mark(conn, orderId, now);
                 matchWork.registerOrder(conn, orderId);
                 operations.insert(conn, operationEntry(OperationType.CREATE_BUY_ORDER,
@@ -443,6 +447,7 @@ public final class AuctionService {
             order = created;
             database.inTransaction(conn -> {
                 orders.insert(conn, created);
+                marketCategories.upsert(conn, key, MarketCategoryClassifier.classify(unit), now);
                 if (immediate) iocOrders.mark(conn, orderId, now);
                 matchWork.registerOrder(conn, orderId);
                 operations.insert(conn, operationEntry(OperationType.CREATE_SELL_ORDER,

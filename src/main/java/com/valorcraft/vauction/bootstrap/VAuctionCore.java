@@ -13,6 +13,9 @@ import com.valorcraft.vauction.economy.EconomyGateway;
 import com.valorcraft.vauction.economy.VEconomyGateway;
 import com.valorcraft.vauction.item.ExactItemMarketKeyStrategy;
 import com.valorcraft.vauction.item.ItemStackCodec;
+import com.valorcraft.vauction.item.MarketCategoryConfig;
+import com.valorcraft.vauction.item.MarketCategoryClassifier;
+import com.valorcraft.vauction.persistence.MarketCategoryRepository;
 import com.valorcraft.vauction.persistence.BuyOrderRepository;
 import com.valorcraft.vauction.persistence.DatabaseManager;
 import com.valorcraft.vauction.persistence.DeliveryRepository;
@@ -93,6 +96,7 @@ public final class VAuctionCore {
             }
             // 1a. конфиг интерфейса (тексты, цвета, лор, кнопки) — при ошибке остаются дефолты
             UiConfig.start(FMLPaths.CONFIGDIR.get());
+            MarketCategoryConfig.start(FMLPaths.CONFIGDIR.get());
             // 2. проверка VEconomy (мод обязателен в mods.toml; проверяем фактическую готовность API)
             core.economyGateway = new VEconomyGateway();
             if (!core.economyGateway.isAvailable()) {
@@ -123,6 +127,7 @@ public final class VAuctionCore {
                     core.economyGateway, core.inventoryOps, core.settings);
             core.auctionReadService = new AuctionReadService(core.database, core.orders,
                     core.deliveries, core.codec, marketKeys, core.settings.allowSelfPurchase());
+            backfillMarketCategories(core.database, core.codec);
             core.recoveryService = new RecoveryService(core.database, core.orders, core.trades,
                     core.deliveries, core.economyGateway, core.auctionService);
             PlayerMarketStateRepository playerStates = new PlayerMarketStateRepository();
@@ -227,6 +232,36 @@ public final class VAuctionCore {
 
     public AuctionService auctionService() {
         return auctionService;
+    }
+
+    private static void backfillMarketCategories(DatabaseManager database, ItemStackCodec codec) {
+        MarketCategoryRepository categories = new MarketCategoryRepository();
+        int classified = 0;
+        String cursor = "";
+        while (true) {
+            String after = cursor;
+            var pending = database.query(c -> categories.marketsAfter(c, after, 128));
+            if (pending.isEmpty()) break;
+            for (var market : pending) {
+                try {
+                    var category = MarketCategoryClassifier.classify(codec.decode(market.item()));
+                    database.inTransaction(c -> {
+                        categories.upsert(c, market.marketKey(), category, System.currentTimeMillis());
+                        return null;
+                    });
+                    classified++;
+                } catch (Exception e) {
+                    database.inTransaction(c -> {
+                        categories.upsert(c, market.marketKey(), com.valorcraft.vauction.item.MarketCategory.OTHER,
+                                System.currentTimeMillis());
+                        return null;
+                    });
+                    classified++;
+                }
+            }
+            cursor = pending.get(pending.size() - 1).marketKey();
+        }
+        if (classified > 0) LOGGER.info("VAuction categories classified: {} markets", classified);
     }
 
     public AuctionReadService auctionReadService() {

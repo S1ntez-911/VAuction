@@ -87,14 +87,18 @@ public final class AuctionReadService {
     }
 
     public Page<MarketCard> markets(int requestedPage, String query, int requestedPageSize) {
+        return markets(requestedPage, query, requestedPageSize, null);
+    }
+
+    public Page<MarketCard> markets(int requestedPage, String query, int requestedPageSize, String category) {
         int pageSize = Math.max(1, Math.min(PAGE_SIZE, requestedPageSize));
         long cutoff = System.currentTimeMillis() - RECENT_MARKET_MILLIS;
         List<List<String>> groups = SearchVocabulary.groups(query);
-        long total = database.query(c -> markets.count(c, groups, cutoff));
+        long total = database.query(c -> markets.count(c, groups, cutoff, category));
         int totalPages = Math.max(1, (int) Math.min(Integer.MAX_VALUE,
                 (total + pageSize - 1) / pageSize));
         int page = Math.min(Math.max(0, requestedPage), totalPages - 1);
-        List<MarketCard> rows = database.query(c -> markets.page(c, groups, cutoff,
+        List<MarketCard> rows = database.query(c -> markets.page(c, groups, cutoff, category,
                 page * pageSize, pageSize));
         return new Page<>(rows, page, page > 0, page + 1 < totalPages, total, totalPages);
     }

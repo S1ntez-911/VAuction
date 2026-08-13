@@ -3,20 +3,20 @@ package com.valorcraft.vauction.gui;
 import net.minecraft.world.item.Item;
 import net.minecraft.world.item.Items;
 
-/** Small, fixed catalogue categories backed by bounded search aliases. */
+/** Fixed player-facing categories backed by real ItemStack classification. */
 enum MarketFilter {
-    ALL("", "filter.all", Items.CHEST),
+    ALL(null, "filter.all", Items.CHEST),
     RESOURCES("resources", "filter.resources", Items.BARREL),
     FOOD("food", "filter.food", Items.BOWL),
     TOOLS("tools", "filter.tools", Items.ANVIL),
     MACHINES("machines", "filter.machines", Items.PISTON);
 
-    final String query;
+    final String category;
     final String textKey;
     final Item icon;
 
-    MarketFilter(String query, String textKey, Item icon) {
-        this.query = query;
+    MarketFilter(String category, String textKey, Item icon) {
+        this.category = category;
         this.textKey = textKey;
         this.icon = icon;
     }

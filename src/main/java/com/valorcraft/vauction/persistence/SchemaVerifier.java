@@ -27,7 +27,8 @@ public final class SchemaVerifier {
             "auction_ioc_orders",
             "auction_player_market_state",
             "auction_order_acceptance",
-            "auction_match_queue"
+            "auction_match_queue",
+            "auction_market_categories"
     );
 
     private SchemaVerifier() {}

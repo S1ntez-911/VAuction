@@ -36,13 +36,23 @@ public final class MarketReadRepository {
 
     public List<MarketCard> page(Connection c, List<List<String>> groups, long recentCutoff,
                                  int offset, int limit) {
+        return page(c, groups, recentCutoff, null, offset, limit);
+    }
+
+    public List<MarketCard> page(Connection c, List<List<String>> groups, long recentCutoff,
+                                 String category, int offset, int limit) {
         boolean searching = !groups.isEmpty();
+        boolean filtering = category != null && !category.isBlank();
         String candidates = searching
-                ? createCandidateCte(whereClause(groups))
+                ? createCandidateCte(whereClause(groups), filtering)
                 : "WITH active AS (SELECT market_key, MAX(updated_at) activity FROM auction_orders "
-                + "WHERE status='ACTIVE' AND processing_state='NONE' GROUP BY market_key), "
+                + "WHERE status='ACTIVE' AND processing_state='NONE' "
+                + (filtering ? "AND EXISTS (SELECT 1 FROM auction_market_categories mc WHERE mc.market_key=auction_orders.market_key AND mc.category=?) " : "")
+                + "GROUP BY market_key), "
                 + "recent AS (SELECT market_key, MAX(settled_at) activity FROM auction_trades "
-                + "WHERE state='SETTLED' AND settled_at>=? GROUP BY market_key), "
+                + "WHERE state='SETTLED' AND settled_at>=? "
+                + (filtering ? "AND EXISTS (SELECT 1 FROM auction_market_categories mc WHERE mc.market_key=auction_trades.market_key AND mc.category=?) " : "")
+                + "GROUP BY market_key), "
                 + "candidate AS (SELECT market_key, MAX(activity) activity FROM "
                 + "(SELECT * FROM active UNION ALL SELECT * FROM recent) GROUP BY market_key), "
                 + "paged AS (SELECT market_key, activity FROM candidate ORDER BY activity DESC, market_key "
@@ -50,13 +60,16 @@ public final class MarketReadRepository {
         try (PreparedStatement ps = c.prepareStatement(candidates + CARD_SELECT)) {
             int i = 1;
             if (searching) {
+                if (filtering) ps.setString(i++, category);
                 for (List<String> group : groups) {
                     for (String alias : group) {
                         ps.setString(i++, "%" + escapeLike(alias) + "%");
                     }
                 }
             } else {
+                if (filtering) ps.setString(i++, category);
                 ps.setLong(i++, recentCutoff);
+                if (filtering) ps.setString(i++, category);
             }
             ps.setInt(i++, Math.max(1, limit));
             ps.setInt(i, Math.max(0, offset));
@@ -72,27 +85,42 @@ public final class MarketReadRepository {
 
     /** Exact, bounded count using the same visibility rules as {@link #page}. */
     public long count(Connection c, List<List<String>> groups, long recentCutoff) {
+        return count(c, groups, recentCutoff, null);
+    }
+
+    public long count(Connection c, List<List<String>> groups, long recentCutoff, String category) {
         boolean searching = !groups.isEmpty();
+        boolean filtering = category != null && !category.isBlank();
         String sql = searching
                 ? "SELECT COUNT(*) FROM (SELECT market_key FROM auction_orders "
-                + "WHERE status='ACTIVE' AND processing_state='NONE' AND " + whereClause(groups)
+                + "WHERE status='ACTIVE' AND processing_state='NONE' "
+                + (filtering ? "AND EXISTS (SELECT 1 FROM auction_market_categories mc WHERE mc.market_key=auction_orders.market_key AND mc.category=?) " : "")
+                + "AND " + whereClause(groups)
                 + " GROUP BY market_key)"
                 : "WITH active AS (SELECT market_key, MAX(updated_at) activity FROM auction_orders "
-                + "WHERE status='ACTIVE' AND processing_state='NONE' GROUP BY market_key), "
+                + "WHERE status='ACTIVE' AND processing_state='NONE' "
+                + (filtering ? "AND EXISTS (SELECT 1 FROM auction_market_categories mc WHERE mc.market_key=auction_orders.market_key AND mc.category=?) " : "")
+                + "GROUP BY market_key), "
                 + "recent AS (SELECT market_key, MAX(settled_at) activity FROM auction_trades "
-                + "WHERE state='SETTLED' AND settled_at>=? GROUP BY market_key), "
+                + "WHERE state='SETTLED' AND settled_at>=? "
+                + (filtering ? "AND EXISTS (SELECT 1 FROM auction_market_categories mc WHERE mc.market_key=auction_trades.market_key AND mc.category=?) " : "")
+                + "GROUP BY market_key), "
                 + "candidate AS (SELECT market_key FROM (SELECT * FROM active UNION ALL SELECT * FROM recent) "
                 + "GROUP BY market_key) SELECT COUNT(*) FROM candidate";
         try (PreparedStatement ps = c.prepareStatement(sql)) {
             if (searching) {
                 int i = 1;
+                if (filtering) ps.setString(i++, category);
                 for (List<String> group : groups) {
                     for (String alias : group) {
                         ps.setString(i++, "%" + escapeLike(alias) + "%");
                     }
                 }
             } else {
-                ps.setLong(1, recentCutoff);
+                int i = 1;
+                if (filtering) ps.setString(i++, category);
+                ps.setLong(i++, recentCutoff);
+                if (filtering) ps.setString(i, category);
             }
             try (ResultSet rs = ps.executeQuery()) {
                 return rs.next() ? rs.getLong(1) : 0;
@@ -117,9 +145,11 @@ public final class MarketReadRepository {
         return sql.toString();
     }
 
-    private static String createCandidateCte(String where) {
+    private static String createCandidateCte(String where, boolean filtering) {
         return "WITH paged AS (SELECT market_key, MAX(updated_at) activity FROM auction_orders "
-                + "WHERE status='ACTIVE' AND processing_state='NONE' AND " + where
+                + "WHERE status='ACTIVE' AND processing_state='NONE' "
+                + (filtering ? "AND EXISTS (SELECT 1 FROM auction_market_categories mc WHERE mc.market_key=auction_orders.market_key AND mc.category=?) " : "")
+                + "AND " + where
                 + " GROUP BY market_key ORDER BY activity DESC, market_key LIMIT ? OFFSET ?) ";
     }
 
