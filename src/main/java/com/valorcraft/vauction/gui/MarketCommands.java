@@ -13,6 +13,7 @@ import com.valorcraft.vauction.bootstrap.VAuctionCore;
 import com.valorcraft.vauction.domain.delivery.AuctionDelivery;
 import com.valorcraft.vauction.domain.market.MarketSummary;
 import com.valorcraft.vauction.domain.order.Order;
+import com.valorcraft.vauction.item.MarketCategoryClassifier;
 import net.minecraft.ChatFormatting;
 import net.minecraft.commands.CommandBuildContext;
 import net.minecraft.commands.CommandSourceStack;
@@ -93,7 +94,11 @@ final class MarketCommands {
                         .then(Commands.literal("reload").executes(ctx -> uiReload(ctx.getSource()))))
                 .then(Commands.literal("admin")
                         .requires(source -> source.hasPermission(2))
-                        .then(Commands.literal("reloadui").executes(ctx -> uiReload(ctx.getSource()))))
+                        .then(Commands.literal("reloadui").executes(ctx -> uiReload(ctx.getSource())))
+                        .then(Commands.literal("reloadcategories")
+                                .executes(ctx -> categoryReload(ctx.getSource())))
+                        .then(Commands.literal("category")
+                                .executes(ctx -> categoryInfo(ctx.getSource()))))
                 .then(Commands.argument("unknown", StringArgumentType.greedyString())
                         .executes(ctx -> help(ctx.getSource())));
     }
@@ -107,6 +112,31 @@ final class MarketCommands {
         MarketController.instance().closeAll(source.getServer());
         source.sendSuccess(() -> Component.literal(UiConfig.text("ui.reloaded"))
                 .withStyle(ChatFormatting.GREEN), false);
+        return 1;
+    }
+
+    private static int categoryReload(CommandSourceStack source) {
+        String error = VAuctionCore.instance().reloadMarketCategories();
+        if (error != null) return fail(source, "Категории не перезагружены: " + error);
+        MarketController.instance().closeAll(source.getServer());
+        source.sendSuccess(() -> Component.literal("Категории биржи перезагружены и пересчитаны.")
+                .withStyle(ChatFormatting.GREEN), false);
+        return 1;
+    }
+
+    private static int categoryInfo(CommandSourceStack source) {
+        ServerPlayer player = player(source);
+        if (player == null) return 0;
+        ItemStack stack = player.getMainHandItem();
+        if (stack.isEmpty()) return fail(source, "Возьмите предмет в основную руку.");
+        MarketCategoryClassifier.Result result = MarketCategoryClassifier.diagnose(stack);
+        String id = BuiltInRegistries.ITEM.getKey(stack.getItem()).toString();
+        source.sendSuccess(() -> Component.literal("Категория: " + result.category().id())
+                .withStyle(ChatFormatting.YELLOW), false);
+        source.sendSuccess(() -> Component.literal("Предмет: " + id).withStyle(ChatFormatting.GRAY), false);
+        source.sendSuccess(() -> Component.literal("Причина: " + result.reason()).withStyle(ChatFormatting.GRAY), false);
+        String tags = result.tags().isEmpty() ? "нет" : String.join(", ", result.tags());
+        source.sendSuccess(() -> Component.literal("Теги: " + tags).withStyle(ChatFormatting.DARK_GRAY), false);
         return 1;
     }
 

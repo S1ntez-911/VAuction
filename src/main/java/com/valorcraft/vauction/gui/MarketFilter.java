@@ -9,7 +9,8 @@ enum MarketFilter {
     RESOURCES("resources", "filter.resources", Items.BARREL),
     FOOD("food", "filter.food", Items.BOWL),
     TOOLS("tools", "filter.tools", Items.ANVIL),
-    MACHINES("machines", "filter.machines", Items.PISTON);
+    MACHINES("machines", "filter.machines", Items.PISTON),
+    OTHER("other", "filter.other", Items.BUNDLE);
 
     final String category;
     final String textKey;

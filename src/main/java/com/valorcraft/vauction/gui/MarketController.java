@@ -1032,6 +1032,7 @@ public final class MarketController {
         filterButton(box, s, UiConfig.slot("categories", "food"), MarketFilter.FOOD);
         filterButton(box, s, UiConfig.slot("categories", "tools"), MarketFilter.TOOLS);
         filterButton(box, s, UiConfig.slot("categories", "machines"), MarketFilter.MACHINES);
+        filterButton(box, s, UiConfig.slot("categories", "other"), MarketFilter.OTHER);
         put(box, s, UiConfig.slot("categories", "back"), uiButton(s, "back", null, null), GuiAction.simple(GuiAction.Type.BACK));
         openBox(player, s, box);
     }
@@ -1046,6 +1047,7 @@ public final class MarketController {
             case FOOD -> "filterFood";
             case TOOLS -> "filterTools";
             case MACHINES -> "filterMachines";
+            case OTHER -> "filterOther";
         };
         put(box, s, slot, uiButton(s, buttonKey, name,
                         List.of(MarketText.muted(UiConfig.text(active ? "filter.active" : "filter.open")))),

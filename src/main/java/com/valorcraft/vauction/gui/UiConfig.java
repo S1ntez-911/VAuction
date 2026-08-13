@@ -170,6 +170,7 @@ public final class UiConfig {
         TEXTS.put("filter.food", "Еда");
         TEXTS.put("filter.tools", "Инструменты");
         TEXTS.put("filter.machines", "Механизмы");
+        TEXTS.put("filter.other", "Прочее");
         TEXTS.put("filter.open", "Показать эту категорию");
         TEXTS.put("filter.active", "Категория выбрана");
         TEXTS.put("filter.reset", "Нажмите, чтобы показать всё");
@@ -423,6 +424,7 @@ public final class UiConfig {
         BUTTONS.put("filterFood", new ButtonCfg(Items.BOWL, "filter.food", "filter.open"));
         BUTTONS.put("filterTools", new ButtonCfg(Items.ANVIL, "filter.tools", "filter.open"));
         BUTTONS.put("filterMachines", new ButtonCfg(Items.PISTON, "filter.machines", "filter.open"));
+        BUTTONS.put("filterOther", new ButtonCfg(Items.BUNDLE, "filter.other", "filter.open"));
         BUTTONS.put("emptyCatalogue", new ButtonCfg(Items.PAPER, "empty.catalogTitle", "empty.createFirst"));
         BUTTONS.put("emptySearch", new ButtonCfg(Items.COMPASS, "empty.searchTitle", "empty.searchBody"));
         BUTTONS.put("emptyFilter", new ButtonCfg(Items.COMPASS, "empty.filterTitle", "empty.filterBody"));
@@ -465,7 +467,7 @@ public final class UiConfig {
                 "newSearch", 48, "info", 49, "catalogue", 50, "next", 53);
         layout("categories",
                 "header", 13, "all", 20, "resources", 21, "food", 22,
-                "tools", 23, "machines", 24, "back", 45);
+                "tools", 23, "machines", 24, "other", 25, "back", 45);
         layout("product", "item", 22, "back", 45, "buy", 48, "sell", 50);
         layout("immediate",
                 "item", 13, "quantityOne", 21, "quantityBulk", 22, "quantityOther", 23,
@@ -577,9 +579,14 @@ public final class UiConfig {
                 document = parsed.getAsJsonObject();
                 boolean addRefresh = missingCatalogueLayoutKey(document, "refresh");
                 boolean addHelp = missingCatalogueLayoutKey(document, "help");
+                boolean addOther = missingLayoutKey(document, "categories", "other");
                 upgraded = mergeMissing(document, defaultDocument);
                 if ("screens.json".equals(entry.getKey()) && (addRefresh || addHelp)) {
                     addNewCatalogueControls(document, addRefresh, addHelp);
+                    upgraded = true;
+                }
+                if ("screens.json".equals(entry.getKey()) && addOther) {
+                    addNewControl(document, "categories", "other", 25);
                     upgraded = true;
                 }
             }
@@ -601,9 +608,13 @@ public final class UiConfig {
     }
 
     private static boolean missingCatalogueLayoutKey(JsonObject document, String key) {
+        return missingLayoutKey(document, "catalogue", key);
+    }
+
+    private static boolean missingLayoutKey(JsonObject document, String screen, String key) {
         JsonObject fileLayouts = obj(document, "layouts");
-        JsonObject catalogue = fileLayouts == null ? null : obj(fileLayouts, "catalogue");
-        return catalogue != null && !catalogue.has(key);
+        JsonObject layout = fileLayouts == null ? null : obj(fileLayouts, screen);
+        return layout != null && !layout.has(key);
     }
 
     /** Adds newly introduced controls only to genuinely free slots in an administrator's existing layout. */
@@ -622,6 +633,22 @@ public final class UiConfig {
         }
         if (addRefresh) catalogue.add("refresh", freeNear(occupied, capacity, capacity - 5));
         if (addHelp) catalogue.add("help", freeNear(occupied, capacity, capacity - 3));
+    }
+
+    private static void addNewControl(JsonObject document, String screen, String key, int preferred) {
+        JsonObject layout = document.getAsJsonObject("layouts").getAsJsonObject(screen);
+        int rows = document.getAsJsonObject("screens").getAsJsonObject(screen).get("rows").getAsInt();
+        int capacity = rows * 9;
+        Set<Integer> occupied = new java.util.HashSet<>();
+        for (String existing : layout.keySet()) {
+            if (key.equals(existing)) continue;
+            JsonElement value = layout.get(existing);
+            if (value.isJsonPrimitive() && value.getAsJsonPrimitive().isNumber()) occupied.add(value.getAsInt());
+            else if (value.isJsonArray()) for (JsonElement slot : value.getAsJsonArray()) {
+                if (slot.isJsonPrimitive() && slot.getAsJsonPrimitive().isNumber()) occupied.add(slot.getAsInt());
+            }
+        }
+        layout.add(key, freeNear(occupied, capacity, preferred));
     }
 
     private static JsonElement freeNear(Set<Integer> occupied, int capacity, int preferred) {

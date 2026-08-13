@@ -264,6 +264,14 @@ public final class VAuctionCore {
         if (classified > 0) LOGGER.info("VAuction categories classified: {} markets", classified);
     }
 
+    public String reloadMarketCategories() {
+        if (!isRunning() || database == null || codec == null) return "Биржа сейчас недоступна.";
+        String error = MarketCategoryConfig.reload();
+        if (error != null) return error;
+        backfillMarketCategories(database, codec);
+        return null;
+    }
+
     public AuctionReadService auctionReadService() {
         return auctionReadService;
     }
