@@ -149,6 +149,8 @@ public final class UiConfig {
         TEXTS.put("card.dash", "—");
         TEXTS.put("catalog.buy", "Купить сейчас");
         TEXTS.put("catalog.sell", "Продать сейчас");
+        TEXTS.put("catalog.last", "Последняя сделка");
+        TEXTS.put("catalog.inactive", "Сейчас активных заявок нет");
         TEXTS.put("catalog.open", "Нажмите, чтобы открыть товар");
 
         TEXTS.put("product.title", "Выберите действие");
@@ -362,7 +364,8 @@ public final class UiConfig {
 
     static {
         LORE.put("catalogCard", List.of(
-                "value:catalog.buy", "value:catalog.sell", "empty", "value:catalog.open"));
+                "value:catalog.buy", "value:catalog.sell", "value:catalog.last",
+                "value:catalog.inactive", "empty", "value:catalog.open"));
         LORE.put("product", List.of(
                 "title:product.title", "value:product.buy", "value:product.sell",
                 "value:product.last", "value:product.available"));
@@ -589,6 +592,9 @@ public final class UiConfig {
                     addNewControl(document, "categories", "other", 25);
                     upgraded = true;
                 }
+                if ("cards.json".equals(entry.getKey()) && upgradeCatalogueCard(document)) {
+                    upgraded = true;
+                }
             }
             if (!document.has("format") || !document.get("format").isJsonPrimitive()
                     || !document.getAsJsonPrimitive("format").isNumber()
@@ -649,6 +655,35 @@ public final class UiConfig {
             }
         }
         layout.add(key, freeNear(occupied, capacity, preferred));
+    }
+
+    /** Adds new information lines without replacing an administrator's existing card order. */
+    private static boolean upgradeCatalogueCard(JsonObject document) {
+        JsonObject lore = obj(document, "lore");
+        if (lore == null || !lore.has("catalogCard") || !lore.get("catalogCard").isJsonArray()) return false;
+        com.google.gson.JsonArray lines = lore.getAsJsonArray("catalogCard");
+        boolean hasLast = false;
+        boolean hasInactive = false;
+        int insertAt = lines.size();
+        for (int i = 0; i < lines.size(); i++) {
+            String token = lines.get(i).isJsonPrimitive() ? lines.get(i).getAsString() : "";
+            if ("value:catalog.last".equals(token)) hasLast = true;
+            if ("value:catalog.inactive".equals(token)) hasInactive = true;
+            if (("empty".equals(token) || "value:catalog.open".equals(token)) && insertAt == lines.size()) {
+                insertAt = i;
+            }
+        }
+        if (hasLast && hasInactive) return false;
+        com.google.gson.JsonArray upgraded = new com.google.gson.JsonArray();
+        for (int i = 0; i <= lines.size(); i++) {
+            if (i == insertAt) {
+                if (!hasLast) upgraded.add("value:catalog.last");
+                if (!hasInactive) upgraded.add("value:catalog.inactive");
+            }
+            if (i < lines.size()) upgraded.add(lines.get(i).deepCopy());
+        }
+        lore.add("catalogCard", upgraded);
+        return true;
     }
 
     private static JsonElement freeNear(Set<Integer> occupied, int capacity, int preferred) {

@@ -38,7 +38,7 @@ class ItemPolicyTest {
         return new AuctionSettings(
                 d.enabled(), d.listingDurationHours(), d.maxActiveListingsPerPlayer(),
                 d.maxBuyOrdersPerPlayer(), d.listingFeeMinor(), d.commissionBps(),
-                d.expiredRetentionDays(), d.historyRetentionDays(), d.allowSelfPurchase(),
+                d.expiredRetentionDays(), d.historyRetentionDays(), d.catalogueHistoryDays(), d.allowSelfPurchase(),
                 allowContainers, false, d.allowEnchantedBooks(),
                 d.maxCompressedItemBytes(), d.maxUncompressedItemBytes(),
                 d.sellOrderExpiryDays(), d.buyOrderExpiryDays(),

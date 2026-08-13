@@ -489,7 +489,7 @@ class AuctionServiceTest {
         AuctionSettings zeroCommission = new AuctionSettings(
                 d.enabled(), d.listingDurationHours(), d.maxActiveListingsPerPlayer(),
                 d.maxBuyOrdersPerPlayer(), d.listingFeeMinor(), 0,
-                d.expiredRetentionDays(), d.historyRetentionDays(), d.allowSelfPurchase(),
+                d.expiredRetentionDays(), d.historyRetentionDays(), d.catalogueHistoryDays(), d.allowSelfPurchase(),
                 d.allowContainersWithContents(), d.blockCustomNbt(), d.allowEnchantedBooks(),
                 d.maxCompressedItemBytes(), d.maxUncompressedItemBytes(),
                 d.sellOrderExpiryDays(), d.buyOrderExpiryDays(), d.itemPolicyMode(),
@@ -1067,7 +1067,7 @@ class AuctionServiceTest {
         AuctionSettings infinite = new AuctionSettings(
                 d.enabled(), d.listingDurationHours(), d.maxActiveListingsPerPlayer(),
                 d.maxBuyOrdersPerPlayer(), d.listingFeeMinor(), d.commissionBps(),
-                d.expiredRetentionDays(), d.historyRetentionDays(), d.allowSelfPurchase(),
+                d.expiredRetentionDays(), d.historyRetentionDays(), d.catalogueHistoryDays(), d.allowSelfPurchase(),
                 d.allowContainersWithContents(), d.blockCustomNbt(), d.allowEnchantedBooks(),
                 d.maxCompressedItemBytes(), d.maxUncompressedItemBytes(), 0, 0,
                 d.itemPolicyMode(), d.blockedItems(), d.blockedTags(),

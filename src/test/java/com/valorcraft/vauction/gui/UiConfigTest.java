@@ -184,6 +184,26 @@ class UiConfigTest {
     }
 
     @Test
+    void existingCatalogueCardReceivesMarketHistoryWithoutReplacingOwnerLines() throws Exception {
+        UiConfig.start(temp);
+        JsonObject cards = read("cards.json");
+        com.google.gson.JsonArray custom = new com.google.gson.JsonArray();
+        custom.add("value:catalog.buy");
+        custom.add("empty");
+        custom.add("value:catalog.open");
+        cards.getAsJsonObject("lore").add("catalogCard", custom);
+        write("cards.json", cards);
+
+        assertNull(UiConfig.reload());
+        com.google.gson.JsonArray upgraded = read("cards.json").getAsJsonObject("lore")
+                .getAsJsonArray("catalogCard");
+        assertEquals("value:catalog.buy", upgraded.get(0).getAsString());
+        assertTrue(upgraded.toString().contains("value:catalog.last"));
+        assertTrue(upgraded.toString().contains("value:catalog.inactive"));
+        assertTrue(upgraded.toString().contains("value:catalog.open"));
+    }
+
+    @Test
     void rowReductionRejectsSlotsOutsideNewCapacityAndKeepsPreviousSnapshot() throws Exception {
         UiConfig.start(temp);
         JsonObject root = read("screens.json");

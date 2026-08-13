@@ -1197,6 +1197,10 @@ public final class MarketController {
         LinkedHashMap<String, UiConfig.LineValue> v = new LinkedHashMap<>();
         v.put("catalog.buy", new UiConfig.LineValue("catalog.buy", moneyOrUnavailable(m.bestAsk()), "success"));
         v.put("catalog.sell", new UiConfig.LineValue("catalog.sell", moneyOrUnavailable(m.bestBid()), "sell"));
+        v.put("catalog.last", new UiConfig.LineValue("catalog.last", moneyOrDash(m.lastTradePrice()), "brand"));
+        if (m.bestAsk() <= 0 && m.bestBid() <= 0) {
+            v.put("catalog.inactive", new UiConfig.LineValue(null, UiConfig.text("catalog.inactive"), "muted"));
+        }
         v.put("catalog.open", new UiConfig.LineValue(null, UiConfig.text("catalog.open"), "info"));
         return UiConfig.lines("catalogCard", v);
     }

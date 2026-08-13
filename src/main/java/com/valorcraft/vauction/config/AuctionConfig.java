@@ -35,6 +35,7 @@ public final class AuctionConfig {
         final ForgeConfigSpec.DoubleValue commissionPercent;
         final ForgeConfigSpec.IntValue expiredRetentionDays;
         final ForgeConfigSpec.IntValue historyRetentionDays;
+        final ForgeConfigSpec.IntValue catalogueHistoryDays;
         final ForgeConfigSpec.BooleanValue allowSelfPurchase;
         final ForgeConfigSpec.IntValue sellOrderExpiryDays;
         final ForgeConfigSpec.IntValue buyOrderExpiryDays;
@@ -81,6 +82,10 @@ public final class AuctionConfig {
             historyRetentionDays = b
                     .comment("Сколько дней хранить журнал транзакций.")
                     .defineInRange("history_retention_days", 90, 1, 3650);
+            catalogueHistoryDays = b
+                    .comment("Сколько дней показывать в каталоге товар без активных заявок после последней сделки.",
+                            "0 = сразу убрать товар, когда исчезли все заявки.")
+                    .defineInRange("catalogue_history_days", 30, 0, 3650);
             allowSelfPurchase = b
                     .comment("Разрешить игроку покупать собственный лот.")
                     .define("allow_self_purchase", false);
@@ -163,6 +168,7 @@ public final class AuctionConfig {
                 commissionBps(),
                 v.expiredRetentionDays.get(),
                 v.historyRetentionDays.get(),
+                v.catalogueHistoryDays.get(),
                 v.allowSelfPurchase.get(),
                 v.allowContainersWithContents.get(),
                 v.blockCustomNbt.get(),

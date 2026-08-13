@@ -20,6 +20,7 @@ public record AuctionSettings(
         int commissionBps,
         int expiredRetentionDays,
         int historyRetentionDays,
+        int catalogueHistoryDays,
         boolean allowSelfPurchase,
         boolean allowContainersWithContents,
         boolean blockCustomNbt,
@@ -53,6 +54,7 @@ public record AuctionSettings(
                 250,                    // commissionBps (2.5%)
                 30,                     // expiredRetentionDays
                 90,                     // historyRetentionDays
+                30,                     // catalogueHistoryDays
                 false,                  // allowSelfPurchase
                 false,                  // allowContainersWithContents
                 false,                  // blockCustomNbt: MarketKey разделяет по полному NBT, контент не теряется

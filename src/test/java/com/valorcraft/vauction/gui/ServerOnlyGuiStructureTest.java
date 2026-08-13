@@ -479,6 +479,8 @@ class ServerOnlyGuiStructureTest {
         assertTrue(controller.contains("\"catalog.buy\""),
                 "card price labels must not collide with the action button name");
         assertTrue(controller.contains("\"catalog.sell\""));
+        assertTrue(controller.contains("\"catalog.last\""));
+        assertTrue(controller.contains("\"catalog.inactive\""));
         assertTrue(controller.contains("\"catalog.open\""));
         assertTrue(controller.contains("\"product.last\""));
         assertTrue(controller.contains("\"product.available\""));

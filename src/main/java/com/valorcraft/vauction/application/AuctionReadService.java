@@ -28,7 +28,7 @@ import java.math.RoundingMode;
 public final class AuctionReadService {
     public static final int PAGE_SIZE = 45;
     public static final int BOOK_DEPTH = 7;
-    private static final long RECENT_MARKET_MILLIS = 30L * 24L * 60L * 60L * 1000L;
+    private static final long DAY_MILLIS = 24L * 60L * 60L * 1000L;
 
     public record MarketView(MarketCard card, List<OrderBookLevel> sells,
                              List<OrderBookLevel> buys) {
@@ -62,6 +62,7 @@ public final class AuctionReadService {
     private final ItemStackCodec codec;
     private final MarketKeyStrategy keys;
     private final boolean allowSelfPurchase;
+    private final int catalogueHistoryDays;
 
     public AuctionReadService(DatabaseManager database, OrderRepository orders,
                               DeliveryRepository deliveries, ItemStackCodec codec,
@@ -78,6 +79,22 @@ public final class AuctionReadService {
         this.codec = codec;
         this.keys = keys;
         this.allowSelfPurchase = allowSelfPurchase;
+        this.catalogueHistoryDays = 30;
+        this.markets = new MarketReadRepository();
+        this.activity = new PlayerMarketActivityReadRepository();
+    }
+
+    public AuctionReadService(DatabaseManager database, OrderRepository orders,
+                              DeliveryRepository deliveries, ItemStackCodec codec,
+                              MarketKeyStrategy keys, boolean allowSelfPurchase,
+                              int catalogueHistoryDays) {
+        this.database = database;
+        this.orders = orders;
+        this.deliveries = deliveries;
+        this.codec = codec;
+        this.keys = keys;
+        this.allowSelfPurchase = allowSelfPurchase;
+        this.catalogueHistoryDays = Math.max(0, catalogueHistoryDays);
         this.markets = new MarketReadRepository();
         this.activity = new PlayerMarketActivityReadRepository();
     }
@@ -92,7 +109,8 @@ public final class AuctionReadService {
 
     public Page<MarketCard> markets(int requestedPage, String query, int requestedPageSize, String category) {
         int pageSize = Math.max(1, Math.min(PAGE_SIZE, requestedPageSize));
-        long cutoff = System.currentTimeMillis() - RECENT_MARKET_MILLIS;
+        long historyMillis = Math.multiplyExact((long) catalogueHistoryDays, DAY_MILLIS);
+        long cutoff = System.currentTimeMillis() - historyMillis;
         List<List<String>> groups = SearchVocabulary.groups(query);
         long total = database.query(c -> markets.count(c, groups, cutoff, category));
         int totalPages = Math.max(1, (int) Math.min(Integer.MAX_VALUE,
