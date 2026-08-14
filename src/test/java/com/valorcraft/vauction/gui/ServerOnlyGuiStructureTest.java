@@ -24,6 +24,8 @@ class ServerOnlyGuiStructureTest {
         assertTrue(commands.contains("Commands.literal(\"sell\")"));
         assertTrue(commands.contains("Commands.literal(\"search\")"));
         assertTrue(commands.contains("Commands.literal(\"mine\")"));
+        assertTrue(commands.contains("Commands.literal(\"claim\")"));
+        assertTrue(commands.contains("MarketController.instance().claimAll(player)"));
         assertFalse(commands.contains("Commands.literal(\"buy\")"));
         assertFalse(commands.contains("Commands.literal(\"orders\")"));
         assertFalse(commands.contains("Commands.literal(\"set\")"));

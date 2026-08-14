@@ -42,6 +42,7 @@ final class MarketCommands {
                         .then(Commands.argument("text", StringArgumentType.greedyString())
                                 .executes(ctx -> search(ctx.getSource(), StringArgumentType.getString(ctx, "text")))))
                 .then(Commands.literal("mine").executes(ctx -> mine(ctx.getSource())))
+                .then(Commands.literal("claim").executes(ctx -> claim(ctx.getSource())))
                 .then(Commands.literal("help").executes(ctx -> help(ctx.getSource())))
                 .then(Commands.literal("reload").requires(source -> source.hasPermission(2))
                         .executes(ctx -> reload(ctx.getSource())))
@@ -73,6 +74,13 @@ final class MarketCommands {
         return 1;
     }
 
+    private static int claim(CommandSourceStack source) {
+        ServerPlayer player = player(source);
+        if (player == null || !ready(source)) return 0;
+        MarketController.instance().claimAll(player);
+        return 1;
+    }
+
     private static int sell(CommandSourceStack source, String priceText) {
         ServerPlayer player = player(source);
         if (player == null || !ready(source)) return 0;
@@ -98,6 +106,7 @@ final class MarketCommands {
                 .withStyle(ChatFormatting.GRAY), false);
         source.sendSuccess(() -> Component.literal("/ah search <название> — найти товар").withStyle(ChatFormatting.GRAY), false);
         source.sendSuccess(() -> Component.literal("/ah mine — показать только свои лоты").withStyle(ChatFormatting.GRAY), false);
+        source.sendSuccess(() -> Component.literal("/ah claim — забрать покупки и возвращённые лоты").withStyle(ChatFormatting.GRAY), false);
         source.sendSuccess(() -> Component.literal("Покупка: нажмите на товар и подтвердите.")
                 .withStyle(ChatFormatting.GRAY), false);
         return 1;

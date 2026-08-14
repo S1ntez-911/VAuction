@@ -92,9 +92,7 @@ public final class MarketNotificationService {
                                 ? ChatFormatting.GREEN : ChatFormatting.GOLD));
             }
             if (batch.hasPurchases()) {
-                player.sendSystemMessage(Component.literal("[Получить предметы]")
-                        .withStyle(style -> style.withColor(ChatFormatting.AQUA)
-                                .withClickEvent(new ClickEvent(ClickEvent.Action.RUN_COMMAND, "/ah"))));
+                player.sendSystemMessage(claimButton());
             }
             player.playNotifySound(SoundEvents.EXPERIENCE_ORB_PICKUP, SoundSource.MASTER, 0.45f, 1.1f);
             long deliveryCursor = database.query(c -> deliveries.latestClaimableId(c, player.getUUID()));
@@ -116,6 +114,7 @@ public final class MarketNotificationService {
                 states.insertCurrent(c, playerId, trade.settledAt(), trade.tradeId(), delivery);
                 return null;
             });
+            if (delivery > 0) player.sendSystemMessage(claimButton());
             return;
         }
         TradeRepository.PlayerSummary summary = database.query(c ->
@@ -131,9 +130,11 @@ public final class MarketNotificationService {
         if (summary.soldQuantity() > 0) text.append(" продано предметов: ").append(summary.soldQuantity()).append(';');
         if (claims.count() > 0) text.append(" получений: ").append(claims.count()).append('.');
         player.sendSystemMessage(Component.literal(text.toString()).withStyle(ChatFormatting.GOLD));
-        player.sendSystemMessage(Component.literal("[Открыть биржу]  [Получить предметы]")
+        player.sendSystemMessage(Component.literal("[Открыть биржу]")
                 .withStyle(style -> style.withColor(ChatFormatting.AQUA)
-                        .withClickEvent(new ClickEvent(ClickEvent.Action.RUN_COMMAND, "/ah"))));
+                        .withClickEvent(new ClickEvent(ClickEvent.Action.RUN_COMMAND, "/ah")))
+                .append(Component.literal("  "))
+                .append(claimButton()));
         database.inTransaction(c -> {
             states.advance(c, playerId, summary.cursor().settledAt(), summary.cursor().tradeId(),
                     claims.latestId());
@@ -147,6 +148,12 @@ public final class MarketNotificationService {
 
     public void clear() {
         batches.clear();
+    }
+
+    private static Component claimButton() {
+        return Component.literal("[Получить предметы]")
+                .withStyle(style -> style.withColor(ChatFormatting.AQUA)
+                        .withClickEvent(new ClickEvent(ClickEvent.Action.RUN_COMMAND, "/ah claim")));
     }
 
     private void markSeenNow(ServerPlayer player, Trade trade) {

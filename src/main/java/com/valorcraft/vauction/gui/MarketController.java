@@ -272,7 +272,7 @@ public final class MarketController {
         }
     }
 
-    private void claimAll(ServerPlayer player) {
+    public void claimAll(ServerPlayer player) {
         int claimed = 0;
         while (claimed < 100) {
             List<AuctionDelivery> page = VAuctionCore.instance().auctionReadService()
@@ -292,6 +292,7 @@ public final class MarketController {
             if (!progress) break;
         }
         if (claimed > 0) tell(player, "Получено предметов: " + claimed + ".", ChatFormatting.GREEN);
+        else tell(player, "Нет предметов, ожидающих получения.", ChatFormatting.YELLOW);
     }
 
     private ItemStack listingCard(ServerPlayer viewer, AuctionListing listing, ItemStack exact, boolean confirm) {
