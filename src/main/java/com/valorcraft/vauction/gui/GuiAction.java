@@ -10,7 +10,8 @@ record GuiAction(Type type, int number, long amount, UUID orderId, long delivery
         HOME, BROWSE, REFRESH, HELP, SEARCH_HELP, MY, OPEN_PRODUCT, OPEN_FILTERS, PAGE, FILTER,
         BUY_NOW, SELL_NOW, BUY, SELL, ADJUST_QUANTITY, SET_QUANTITY, SET_MAX_QUANTITY,
         REVIEW, CONFIRM_IMMEDIATE, CONFIRM_ORDER, MANAGE_ORDER, PREPARE_CANCEL, CONFIRM_CANCEL, CLAIM, BACK,
-        EXACT_QUANTITY, EXACT_PRICE
+        EXACT_QUANTITY, EXACT_PRICE, OPEN_LISTING, CONFIRM_PURCHASE, CANCEL_LISTING,
+        TOGGLE_MINE, NEXT_CATEGORY, CLAIM_ALL
     }
 
     static GuiAction simple(Type type) {
@@ -35,6 +36,10 @@ record GuiAction(Type type, int number, long amount, UUID orderId, long delivery
 
     static GuiAction delivery(long deliveryId) {
         return new GuiAction(Type.CLAIM, 0, 0, null, deliveryId, ItemStack.EMPTY);
+    }
+
+    static GuiAction listing(Type type, long listingId) {
+        return new GuiAction(type, 0, 0, null, listingId, ItemStack.EMPTY);
     }
 
     static GuiAction manage(UUID orderId, ItemStack item, boolean buy, int remaining, long price) {

@@ -56,6 +56,7 @@ public final class ServerEvents {
         if (--ticksUntilExpiry <= 0 && !budget.exhausted()) {
             var expiry = VAuctionCore.instance().auctionService()
                     .expireSlice(System.currentTimeMillis(), budget);
+            VAuctionCore.instance().simpleAuctionService().expire(64);
             ticksUntilExpiry = expiry.backlogRemaining()
                     ? 1 : AuctionWorkLimits.EXPIRY_INTERVAL_TICKS;
         }
@@ -66,10 +67,8 @@ public final class ServerEvents {
                     : Math.min(AuctionWorkLimits.RECOVERY_MAX_TICKS, recoveryIntervalTicks * 2);
             ticksUntilRecovery = recoveryIntervalTicks;
         }
-        if (!budget.exhausted()) {
-            VAuctionCore.instance().auctionService().pumpMatching(budget,
-                    AuctionWorkLimits.MAX_MATCH_FILLS_PER_PUMP);
-        }
+        // The player-facing order book is retired. Recovery/cancellation may still
+        // finish old operations, but no new legacy matches are created.
         if (!budget.exhausted()) {
             VAuctionCore.instance().auctionService().finishImmediateRemainders(budget, 16);
         }

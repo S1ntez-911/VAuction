@@ -87,7 +87,8 @@ class DatabaseTest {
         assertEquals(Set.of("auction_listings", "auction_buy_orders", "auction_deliveries",
                 "auction_sales", "auction_operation_log", "auction_orders", "auction_trades",
                 "auction_order_acceptance", "auction_match_queue", "auction_ioc_orders",
-                "auction_player_market_state", "auction_market_categories", "schema_version"), tables);
+                "auction_player_market_state", "auction_market_categories", "auction_simple_listing_ids",
+                "schema_version"), tables);
         assertTrue(db.schemaVersion() >= 1, "schema version must be >= 1");
     }
 
@@ -267,7 +268,7 @@ MarketReadRepository read = new MarketReadRepository();
             });
 
             MigrationRunner.Result result = source.query(MigrationRunner::run);
-            assertEquals(8, result.schemaVersion());
+            assertEquals(9, result.schemaVersion());
             String phase = source.query(c -> {
                 try (Statement st = c.createStatement();
                      ResultSet rs = st.executeQuery(
@@ -307,9 +308,10 @@ MarketReadRepository read = new MarketReadRepository();
             });
 
             MigrationRunner.Result result = source.query(MigrationRunner::run);
-            assertEquals(8, result.schemaVersion());
+            assertEquals(9, result.schemaVersion());
             assertEquals(List.of("V005__bounded_work.sql", "V006__gui_read_indexes.sql",
-                            "V007__player_experience.sql", "V008__market_categories.sql"),
+                            "V007__player_experience.sql", "V008__market_categories.sql",
+                            "V009__simple_listings.sql"),
                     result.appliedFiles());
             int acceptedRows = source.query(c -> {
                 try (Statement st = c.createStatement(); ResultSet rs = st.executeQuery(
@@ -447,7 +449,7 @@ MarketReadRepository read = new MarketReadRepository();
 
         try (DatabaseManager fileDb = DatabaseManager.openSqlite(databasePath)) {
             fileDb.initialize();
-            assertEquals(8, fileDb.schemaVersion());
+            assertEquals(9, fileDb.schemaVersion());
         }
 
         assertTrue(Files.isRegularFile(databasePath));

@@ -6,6 +6,7 @@ import com.valorcraft.vauction.application.DeliveryService;
 import com.valorcraft.vauction.application.InventoryOps;
 import com.valorcraft.vauction.application.ListingService;
 import com.valorcraft.vauction.application.ServerInventoryOps;
+import com.valorcraft.vauction.application.SimpleAuctionService;
 import com.valorcraft.vauction.application.MarketNotificationService;
 import com.valorcraft.vauction.config.AuctionConfig;
 import com.valorcraft.vauction.config.AuctionSettings;
@@ -71,6 +72,7 @@ public final class VAuctionCore {
     private AuctionService auctionService;
     private AuctionReadService auctionReadService;
     private RecoveryService recoveryService;
+    private SimpleAuctionService simpleAuctionService;
     private MarketNotificationService notificationService;
 
     private VAuctionCore() {}
@@ -123,6 +125,9 @@ public final class VAuctionCore {
             core.inventoryOps = new ServerInventoryOps(() -> server);
             core.listingService = new ListingService(core.database, core.listings, core.operations, core.codec);
             core.deliveryService = new DeliveryService(core.database, core.deliveries);
+            core.simpleAuctionService = new SimpleAuctionService(core.database, core.listings,
+                    core.sales, core.deliveries, core.operations, core.codec,
+                    core.economyGateway, core.inventoryOps, core.settings);
             ExactItemMarketKeyStrategy marketKeys = new ExactItemMarketKeyStrategy(core.codec);
             core.auctionService = new AuctionService(core.database, core.orders, core.trades,
                     core.operations, core.deliveries, core.codec,
@@ -141,10 +146,22 @@ public final class VAuctionCore {
 
             // 6а. автоматическое восстановление после краха (идемпотентно)
             RecoveryService.ScanReport recovery = core.recoveryService.startupScan();
+            int simpleQuarantined = core.simpleAuctionService.quarantinePendingCreations(128);
+            int simpleRecovered = core.simpleAuctionService.recoverReserved(128);
+            int retiredOrders = retirePlayerOrderBook(core.database, core.orders, core.auctionService);
             if (recovery.total() > 0) {
                 LOGGER.info("VAuction recovery: fills={}, escrows={}, claims={}, review={}",
                         recovery.fillsFinished(), recovery.escrowsRestored(),
                         recovery.claimsQuarantined(), recovery.ordersInManualReview());
+            }
+            if (simpleRecovered > 0) {
+                LOGGER.info("VAuction simple listings recovered: {}", simpleRecovered);
+            }
+            if (simpleQuarantined > 0) {
+                LOGGER.warn("VAuction simple listings require manual review: {}", simpleQuarantined);
+            }
+            if (retiredOrders > 0) {
+                LOGGER.info("VAuction retired old player orders with safe refunds: {}", retiredOrders);
             }
 
             core.state = State.RUNNING;
@@ -238,6 +255,10 @@ public final class VAuctionCore {
         return auctionService;
     }
 
+    public SimpleAuctionService simpleAuctionService() {
+        return simpleAuctionService;
+    }
+
     private static void backfillMarketCategories(DatabaseManager database, ItemStackCodec codec) {
         MarketCategoryRepository categories = new MarketCategoryRepository();
         int classified = 0;
@@ -266,6 +287,28 @@ public final class VAuctionCore {
             cursor = pending.get(pending.size() - 1).marketKey();
         }
         if (classified > 0) LOGGER.info("VAuction categories classified: {} markets", classified);
+    }
+
+    /** The old order book is no longer public; safely return every ordinary active order. */
+    private static int retirePlayerOrderBook(DatabaseManager database, OrderRepository orders,
+                                             AuctionService auction) {
+        int retired = 0;
+        while (true) {
+            var ids = database.query(c -> orders.activeUuidOrderIds(c, 128));
+            if (ids.isEmpty()) return retired;
+            int progress = 0;
+            for (var id : ids) {
+                var order = database.query(c -> orders.findById(c, id).orElse(null));
+                if (order != null && auction.cancel(order.ownerUuid(), id, "simple-market migration").isSuccess()) {
+                    retired++;
+                    progress++;
+                }
+            }
+            if (progress == 0) {
+                LOGGER.warn("VAuction could not retire {} old orders; recovery will keep their assets safe", ids.size());
+                return retired;
+            }
+        }
     }
 
     public String reloadMarketCategories() {

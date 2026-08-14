@@ -34,6 +34,7 @@ final class ServerChestMenu extends ChestMenu {
 
     @Override
     public void clicked(int slotId, int button, ClickType clickType, Player player) {
+        if (clickType != ClickType.PICKUP) return;
         controller.clicked(player, session, slotId, button, clickType);
     }
 

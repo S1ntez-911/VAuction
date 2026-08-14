@@ -152,6 +152,9 @@ public final class UiConfig {
         TEXTS.put("catalog.last", "Последняя сделка");
         TEXTS.put("catalog.inactive", "Сейчас активных заявок нет");
         TEXTS.put("catalog.open", "Нажмите, чтобы открыть товар");
+        TEXTS.put("listing.priceLabel", "Цена за лот");
+        TEXTS.put("listing.quantityLabel", "Количество");
+        TEXTS.put("listing.sellerLabel", "Продавец");
 
         TEXTS.put("product.title", "Выберите действие");
         TEXTS.put("product.buy", "Цена покупки");
@@ -366,6 +369,9 @@ public final class UiConfig {
         LORE.put("catalogCard", List.of(
                 "value:catalog.buy", "value:catalog.sell", "value:catalog.last",
                 "value:catalog.inactive", "empty", "value:catalog.open"));
+        LORE.put("listingCard", List.of(
+                "value:listing.price", "value:listing.quantity", "value:listing.seller",
+                "empty", "value:listing.action"));
         LORE.put("product", List.of(
                 "title:product.title", "value:product.buy", "value:product.sell",
                 "value:product.last", "value:product.available"));
@@ -444,7 +450,7 @@ public final class UiConfig {
         screen("my", 6, "Биржа: моё");
         screen("manage", 6, "Биржа: заявка");
 
-        screenPlaceholders("catalogue", "category", "search", "page", "pages", "results");
+        screenPlaceholders("catalogue", "category", "search", "page", "pages", "results", "mode");
         screenPlaceholders("search", "category", "search", "page", "pages", "results");
         screenPlaceholders("categories", "category");
         screenPlaceholders("product", "item", "available", "buy_price", "sell_price", "last_price");

@@ -64,6 +64,7 @@ final class GuiItems {
         ItemStack visual = realItem == null || realItem.isEmpty()
                 ? ItemStack.EMPTY : new ItemStack(realItem.getItem());
         if (visual.isEmpty()) return visual;
+        visual.setCount(Math.max(1, realItem.getCount()));
         visual.setHoverName(name);
         visual.getOrCreateTag().putInt("HideFlags", 127);
         return namedButton(visual, name, marketLines);

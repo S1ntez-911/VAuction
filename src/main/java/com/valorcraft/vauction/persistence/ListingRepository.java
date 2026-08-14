@@ -20,6 +20,8 @@ import java.util.UUID;
  */
 public final class ListingRepository {
 
+    public record ListingPage(List<AuctionListing> items, long total) {}
+
     private static final String COLUMNS = "listing_id, seller_uuid, status, "
             + "item_blob, item_codec_version, item_hash, item_registry_id, item_display_name, "
             + "item_search_name, quantity, price_minor, listing_fee_minor, commission_bps, "
@@ -44,6 +46,117 @@ public final class ListingRepository {
             }
         } catch (SQLException e) {
             throw new DatabaseException("insert listing failed", e);
+        }
+    }
+
+    /** Mark a listing as belonging to the simple fixed-price player market. */
+    public void markSimple(Connection c, long listingId, String category, long createdAt) {
+        String sql = "INSERT INTO auction_simple_listing_ids (listing_id, category, created_at, state) VALUES (?,?,?,'PENDING')";
+        try (PreparedStatement ps = c.prepareStatement(sql)) {
+            ps.setLong(1, listingId);
+            ps.setString(2, category);
+            ps.setLong(3, createdAt);
+            ps.executeUpdate();
+        } catch (SQLException e) {
+            throw new DatabaseException("mark simple listing failed: " + listingId, e);
+        }
+    }
+
+    public boolean setSimpleState(Connection c, long listingId, String expected, String state) {
+        try (PreparedStatement ps = c.prepareStatement(
+                "UPDATE auction_simple_listing_ids SET state=? WHERE listing_id=? AND state=?")) {
+            ps.setString(1, state);
+            ps.setLong(2, listingId);
+            ps.setString(3, expected);
+            return ps.executeUpdate() == 1;
+        } catch (SQLException e) {
+            throw new DatabaseException("update simple listing state failed: " + listingId, e);
+        }
+    }
+
+    /** Indexed, bounded page for the new catalogue. Old order-book data is deliberately excluded. */
+    public ListingPage simpleActivePage(Connection c, UUID seller, String category,
+                                        String search, int offset, int limit) {
+        StringBuilder where = new StringBuilder(" FROM auction_listings l JOIN auction_simple_listing_ids s "
+                + "ON s.listing_id=l.listing_id WHERE l.status='ACTIVE' AND s.state='ACTIVE'");
+        List<Object> args = new ArrayList<>();
+        if (seller != null) {
+            where.append(" AND l.seller_uuid=?");
+            args.add(seller.toString());
+        }
+        if (category != null && !category.isBlank()) {
+            where.append(" AND s.category=?");
+            args.add(category);
+        }
+        if (search != null && !search.isBlank()) {
+            where.append(" AND l.item_search_name LIKE ? ESCAPE '\\\\'");
+            args.add("%" + escapeLike(search.toLowerCase(java.util.Locale.ROOT)) + "%");
+        }
+        try {
+            long total;
+            try (PreparedStatement ps = c.prepareStatement("SELECT COUNT(*)" + where)) {
+                bindArgs(ps, args);
+                try (ResultSet rs = ps.executeQuery()) { total = rs.next() ? rs.getLong(1) : 0L; }
+            }
+            String sql = "SELECT " + prefixColumns("l.") + where
+                    + " ORDER BY l.created_at DESC,l.listing_id DESC LIMIT ? OFFSET ?";
+            try (PreparedStatement ps = c.prepareStatement(sql)) {
+                bindArgs(ps, args);
+                ps.setInt(args.size() + 1, Math.max(1, limit));
+                ps.setInt(args.size() + 2, Math.max(0, offset));
+                try (ResultSet rs = ps.executeQuery()) {
+                    List<AuctionListing> items = new ArrayList<>();
+                    while (rs.next()) items.add(map(rs));
+                    return new ListingPage(List.copyOf(items), total);
+                }
+            }
+        } catch (SQLException e) {
+            throw new DatabaseException("simple listing page failed", e);
+        }
+    }
+
+    public long countSimpleActive(Connection c, UUID seller) {
+        String sql = "SELECT COUNT(*) FROM auction_listings l JOIN auction_simple_listing_ids s "
+                + "ON s.listing_id=l.listing_id WHERE l.status='ACTIVE' AND s.state='ACTIVE' AND l.seller_uuid=?";
+        try (PreparedStatement ps = c.prepareStatement(sql)) {
+            ps.setString(1, seller.toString());
+            try (ResultSet rs = ps.executeQuery()) { return rs.next() ? rs.getLong(1) : 0L; }
+        } catch (SQLException e) {
+            throw new DatabaseException("count simple listings failed", e);
+        }
+    }
+
+    public List<AuctionListing> simpleReserved(Connection c, int limit) {
+        String sql = "SELECT " + prefixColumns("l.") + " FROM auction_listings l "
+                + "JOIN auction_simple_listing_ids s ON s.listing_id=l.listing_id "
+                + "WHERE l.status='RESERVED' ORDER BY l.updated_at,l.listing_id LIMIT ?";
+        try (PreparedStatement ps = c.prepareStatement(sql)) {
+            ps.setInt(1, Math.max(1, limit));
+            try (ResultSet rs = ps.executeQuery()) {
+                List<AuctionListing> out = new ArrayList<>();
+                while (rs.next()) out.add(map(rs));
+                return out;
+            }
+        } catch (SQLException e) {
+            throw new DatabaseException("reserved simple listings failed", e);
+        }
+    }
+
+    public List<AuctionListing> simpleExpiredActive(Connection c, long now, int limit) {
+        String sql = "SELECT " + prefixColumns("l.") + " FROM auction_listings l "
+                + "JOIN auction_simple_listing_ids s ON s.listing_id=l.listing_id "
+                + "WHERE l.status='ACTIVE' AND s.state='ACTIVE' AND l.expires_at<=? "
+                + "ORDER BY l.expires_at,l.listing_id LIMIT ?";
+        try (PreparedStatement ps = c.prepareStatement(sql)) {
+            ps.setLong(1, now);
+            ps.setInt(2, Math.max(1, limit));
+            try (ResultSet rs = ps.executeQuery()) {
+                List<AuctionListing> out = new ArrayList<>();
+                while (rs.next()) out.add(map(rs));
+                return out;
+            }
+        } catch (SQLException e) {
+            throw new DatabaseException("expired simple listings failed", e);
         }
     }
 
@@ -203,5 +316,18 @@ public final class ListingRepository {
 
     private static String nullIfNull(UUID u) {
         return u == null ? null : u.toString();
+    }
+
+    private static String prefixColumns(String prefix) {
+        return java.util.Arrays.stream(COLUMNS.split(", "))
+                .map(column -> prefix + column).collect(java.util.stream.Collectors.joining(", "));
+    }
+
+    private static void bindArgs(PreparedStatement ps, List<Object> args) throws SQLException {
+        for (int i = 0; i < args.size(); i++) ps.setObject(i + 1, args.get(i));
+    }
+
+    private static String escapeLike(String value) {
+        return value.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_");
     }
 }

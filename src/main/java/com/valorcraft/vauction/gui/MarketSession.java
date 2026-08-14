@@ -31,6 +31,8 @@ final class MarketSession {
     boolean executing;
     boolean immediate;
     boolean searchActive;
+    boolean mineOnly;
+    long selectedListingId;
     MarketFilter filter = MarketFilter.ALL;
     AuctionReadService.ImmediateQuote quote;
     SimpleContainer contents;

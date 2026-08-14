@@ -78,6 +78,16 @@ public record AuctionListing(
                 cancelReason, adminActorUuid, version);
     }
 
+    /** Release a failed/abandoned purchase reservation back to the catalogue. */
+    public AuctionListing releaseReservation(long now) {
+        if (status != ListingStatus.RESERVED) {
+            throw new IllegalStateException("only RESERVED can be released, got " + status);
+        }
+        return new AuctionListing(listingId, sellerUuid, ListingStatus.ACTIVE, item,
+                priceMinor, listingFeeMinor, commissionBps, createdAt, expiresAt, now,
+                null, null, null, null, cancelReason, adminActorUuid, version);
+    }
+
     public AuctionListing toCancelled(String reason, UUID adminActor, long now) {
         if (status == ListingStatus.SOLD || status == ListingStatus.CANCELLED) {
             throw new IllegalStateException("cannot cancel listing in state " + status);

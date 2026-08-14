@@ -1,130 +1,135 @@
 package com.valorcraft.vauction.gui;
 
-import com.mojang.brigadier.arguments.IntegerArgumentType;
-import com.mojang.brigadier.arguments.LongArgumentType;
 import com.mojang.brigadier.arguments.StringArgumentType;
 import com.mojang.brigadier.builder.LiteralArgumentBuilder;
 import com.mojang.brigadier.context.CommandContext;
 import com.mojang.brigadier.suggestion.Suggestions;
 import com.mojang.brigadier.suggestion.SuggestionsBuilder;
-import com.valorcraft.vauction.application.AuctionReadService;
-import com.valorcraft.vauction.application.AuctionService;
+import com.valorcraft.vauction.application.SimpleAuctionService;
 import com.valorcraft.vauction.bootstrap.VAuctionCore;
-import com.valorcraft.vauction.domain.delivery.AuctionDelivery;
-import com.valorcraft.vauction.domain.market.MarketSummary;
-import com.valorcraft.vauction.domain.order.Order;
 import com.valorcraft.vauction.item.MarketCategoryClassifier;
 import net.minecraft.ChatFormatting;
-import net.minecraft.commands.CommandBuildContext;
 import net.minecraft.commands.CommandSourceStack;
 import net.minecraft.commands.Commands;
-import net.minecraft.commands.SharedSuggestionProvider;
-import net.minecraft.commands.arguments.item.ItemArgument;
-import net.minecraft.core.registries.BuiltInRegistries;
-import net.minecraft.network.chat.ClickEvent;
 import net.minecraft.network.chat.Component;
-import net.minecraft.network.chat.MutableComponent;
 import net.minecraft.server.level.ServerPlayer;
 import net.minecraft.world.item.ItemStack;
 import net.minecraftforge.event.RegisterCommandsEvent;
 
 import java.math.BigDecimal;
-import java.util.UUID;
 import java.util.concurrent.CompletableFuture;
 
-/** Player-facing command fallback. Every root alias has the same tree. */
+/** Minimal player command surface for the fixed-price auction. */
 final class MarketCommands {
     private MarketCommands() {}
 
     static void register(RegisterCommandsEvent event) {
-        CommandBuildContext context = event.getBuildContext();
-        event.getDispatcher().register(root("market", context));
-        event.getDispatcher().register(root("auction", context));
-        event.getDispatcher().register(root("ah", context));
+        event.getDispatcher().register(root("ah"));
+        event.getDispatcher().register(root("auction"));
+        event.getDispatcher().register(root("market"));
     }
 
-    private static LiteralArgumentBuilder<CommandSourceStack> root(String name, CommandBuildContext context) {
+    private static LiteralArgumentBuilder<CommandSourceStack> root(String name) {
         return Commands.literal(name)
                 .executes(ctx -> open(ctx.getSource()))
-                .then(Commands.literal("help").executes(ctx -> help(ctx.getSource()))
-                        .then(Commands.literal("commands").executes(ctx -> helpCommands(ctx.getSource())))
-                        .then(Commands.literal("sell").executes(ctx -> helpSell(ctx.getSource())))
-                        .then(Commands.literal("buy").executes(ctx -> helpBuy(ctx.getSource()))))
-                .then(Commands.literal("search").executes(ctx -> help(ctx.getSource()))
-                        .then(Commands.argument("text", StringArgumentType.greedyString())
-                                .suggests(MarketCommands::suggestItems)
-                                .executes(ctx -> search(ctx.getSource(), StringArgumentType.getString(ctx, "text")))))
-                .then(Commands.literal("set")
-                        .requires(MarketCommands::inputDraftActive)
-                        .then(Commands.argument("value", StringArgumentType.word())
-                                .suggests(MarketCommands::suggestDraftInput)
-                                .executes(ctx -> setExact(ctx.getSource(),
-                                        StringArgumentType.getString(ctx, "value")))))
-                .then(Commands.literal("sell").executes(ctx -> helpSell(ctx.getSource()))
+                .then(Commands.literal("sell")
+                        .executes(ctx -> sellHelp(ctx.getSource()))
                         .then(Commands.argument("price", StringArgumentType.word())
                                 .suggests(MarketCommands::suggestPrices)
-                                .executes(ctx -> sell(ctx.getSource(), StringArgumentType.getString(ctx, "price"), null))
-                                .then(Commands.argument("quantity", IntegerArgumentType.integer(1))
-                                        .suggests(MarketCommands::suggestQuantities)
-                                        .executes(ctx -> sell(ctx.getSource(), StringArgumentType.getString(ctx, "price"),
-                                                IntegerArgumentType.getInteger(ctx, "quantity"))))))
-                .then(Commands.literal("buy").executes(ctx -> helpBuy(ctx.getSource()))
-                        .then(Commands.argument("item", ItemArgument.item(context))
-                                .executes(ctx -> helpBuy(ctx.getSource()))
-                                .then(Commands.argument("quantity", IntegerArgumentType.integer(1))
-                                        .suggests(MarketCommands::suggestCommonQuantities)
-                                        .executes(ctx -> helpBuy(ctx.getSource()))
-                                        .then(Commands.argument("maxPrice", StringArgumentType.word())
-                                                .suggests(MarketCommands::suggestPrices)
-                                                .executes(ctx -> buy(ctx, IntegerArgumentType.getInteger(ctx, "quantity"),
-                                                        StringArgumentType.getString(ctx, "maxPrice")))))))
-                .then(Commands.literal("orders").executes(ctx -> orders(ctx.getSource())))
-                .then(Commands.literal("cancel").executes(ctx -> helpCommands(ctx.getSource()))
-                        .then(Commands.argument("orderId", StringArgumentType.word())
-                                .suggests(MarketCommands::suggestOrders)
-                                .executes(ctx -> cancel(ctx.getSource(), StringArgumentType.getString(ctx, "orderId")))))
-                .then(Commands.literal("claims").executes(ctx -> claims(ctx.getSource())))
-                .then(Commands.literal("claim").executes(ctx -> helpCommands(ctx.getSource()))
-                        .then(Commands.argument("deliveryId", LongArgumentType.longArg(1))
-                                .suggests(MarketCommands::suggestClaims)
-                                .executes(ctx -> claim(ctx.getSource(), LongArgumentType.getLong(ctx, "deliveryId")))))
-                .then(Commands.literal("info").executes(ctx -> info(ctx.getSource())))
-                .then(Commands.literal("ui")
-                        .requires(source -> source.hasPermission(2))
+                                .executes(ctx -> sell(ctx.getSource(),
+                                        StringArgumentType.getString(ctx, "price")))))
+                .then(Commands.literal("search")
+                        .executes(ctx -> fail(ctx.getSource(), "Использование: /ah search <название>"))
+                        .then(Commands.argument("text", StringArgumentType.greedyString())
+                                .executes(ctx -> search(ctx.getSource(),
+                                        StringArgumentType.getString(ctx, "text")))))
+                .then(Commands.literal("mine").executes(ctx -> mine(ctx.getSource())))
+                .then(Commands.literal("claims").executes(ctx -> mine(ctx.getSource())))
+                .then(Commands.literal("help").executes(ctx -> help(ctx.getSource())))
+                .then(Commands.literal("ui").requires(source -> source.hasPermission(2))
                         .then(Commands.literal("reload").executes(ctx -> uiReload(ctx.getSource()))))
-                .then(Commands.literal("admin")
-                        .requires(source -> source.hasPermission(2))
+                .then(Commands.literal("admin").requires(source -> source.hasPermission(2))
                         .then(Commands.literal("reloadui").executes(ctx -> uiReload(ctx.getSource())))
-                        .then(Commands.literal("reloadcategories")
-                                .executes(ctx -> categoryReload(ctx.getSource())))
-                        .then(Commands.literal("category")
-                                .executes(ctx -> categoryInfo(ctx.getSource())))
-                        .then(Commands.literal("health")
-                                .executes(ctx -> adminHealth(ctx.getSource())))
-                        .then(Commands.literal("recover")
-                                .executes(ctx -> adminRecover(ctx.getSource()))))
+                        .then(Commands.literal("reloadcategories").executes(ctx -> categoryReload(ctx.getSource())))
+                        .then(Commands.literal("category").executes(ctx -> categoryInfo(ctx.getSource())))
+                        .then(Commands.literal("recover").executes(ctx -> recover(ctx.getSource()))))
                 .then(Commands.argument("unknown", StringArgumentType.greedyString())
                         .executes(ctx -> help(ctx.getSource())));
     }
 
-    /** Перечитывает config/VMods/VAuction/ui/*.json и переоткрывает сессии (только оп). */
+    private static int open(CommandSourceStack source) {
+        ServerPlayer player = player(source);
+        if (player == null || !ready(source)) return 0;
+        MarketController.instance().open(player);
+        return 1;
+    }
+
+    private static int search(CommandSourceStack source, String query) {
+        ServerPlayer player = player(source);
+        if (player == null || !ready(source)) return 0;
+        MarketController.instance().search(player, query, 0);
+        return 1;
+    }
+
+    private static int mine(CommandSourceStack source) {
+        ServerPlayer player = player(source);
+        if (player == null || !ready(source)) return 0;
+        MarketController.instance().openOrders(player);
+        return 1;
+    }
+
+    private static int sell(CommandSourceStack source, String priceText) {
+        ServerPlayer player = player(source);
+        if (player == null || !ready(source)) return 0;
+        final long price;
+        try { price = CurrencyInput.parse(priceText); }
+        catch (CurrencyInput.InvalidPrice e) { return fail(source, e.getMessage()); }
+        ItemStack stack = player.getMainHandItem();
+        if (stack.isEmpty()) return fail(source, "Возьмите продаваемый стек в основную руку.");
+        SimpleAuctionService.Outcome outcome = VAuctionCore.instance().simpleAuctionService()
+                .create(player.getUUID(), stack.copy(), price);
+        if (!outcome.success()) return fail(source, outcome.message());
+        source.sendSuccess(() -> Component.literal(outcome.message()
+                + " Цена за весь стек: " + CurrencyText.format(price) + ".")
+                .withStyle(outcome.result() == SimpleAuctionService.Result.ACCEPTED_PENDING
+                        ? ChatFormatting.YELLOW : ChatFormatting.GREEN), false);
+        return 1;
+    }
+
+    private static int help(CommandSourceStack source) {
+        source.sendSuccess(() -> Component.literal("Аукцион ValorCraft").withStyle(ChatFormatting.GOLD), false);
+        source.sendSuccess(() -> Component.literal("/ah — открыть все лоты").withStyle(ChatFormatting.GRAY), false);
+        source.sendSuccess(() -> Component.literal("/ah sell <цена> — продать весь стек в руке")
+                .withStyle(ChatFormatting.GRAY), false);
+        source.sendSuccess(() -> Component.literal("/ah mine — показать только свои лоты")
+                .withStyle(ChatFormatting.GRAY), false);
+        source.sendSuccess(() -> Component.literal("Покупка: нажмите на товар и подтвердите.")
+                .withStyle(ChatFormatting.GRAY), false);
+        return 1;
+    }
+
+    private static int sellHelp(CommandSourceStack source) {
+        source.sendSuccess(() -> Component.literal("Использование: /ah sell <цена>")
+                .withStyle(ChatFormatting.YELLOW), false);
+        source.sendSuccess(() -> Component.literal("Команда выставляет весь стек из основной руки. Цена указывается за весь лот.")
+                .withStyle(ChatFormatting.GRAY), false);
+        return 1;
+    }
+
     private static int uiReload(CommandSourceStack source) {
         String error = UiConfig.reload();
-        if (error != null) {
-            return fail(source, UiConfig.fmt("ui.badJson", "error", error));
-        }
+        if (error != null) return fail(source, "Не удалось применить интерфейс: " + error);
         MarketController.instance().closeAll(source.getServer());
-        source.sendSuccess(() -> Component.literal(UiConfig.text("ui.reloaded"))
+        source.sendSuccess(() -> Component.literal("Интерфейс аукциона обновлён.")
                 .withStyle(ChatFormatting.GREEN), false);
         return 1;
     }
 
     private static int categoryReload(CommandSourceStack source) {
         String error = VAuctionCore.instance().reloadMarketCategories();
-        if (error != null) return fail(source, "Категории не перезагружены: " + error);
+        if (error != null) return fail(source, error);
         MarketController.instance().closeAll(source.getServer());
-        source.sendSuccess(() -> Component.literal("Категории биржи перезагружены и пересчитаны.")
-                .withStyle(ChatFormatting.GREEN), false);
+        source.sendSuccess(() -> Component.literal("Категории обновлены.").withStyle(ChatFormatting.GREEN), false);
         return 1;
     }
 
@@ -134,452 +139,52 @@ final class MarketCommands {
         ItemStack stack = player.getMainHandItem();
         if (stack.isEmpty()) return fail(source, "Возьмите предмет в основную руку.");
         MarketCategoryClassifier.Result result = MarketCategoryClassifier.diagnose(stack);
-        String id = BuiltInRegistries.ITEM.getKey(stack.getItem()).toString();
-        source.sendSuccess(() -> Component.literal("Категория: " + result.category().id())
-                .withStyle(ChatFormatting.YELLOW), false);
-        source.sendSuccess(() -> Component.literal("Предмет: " + id).withStyle(ChatFormatting.GRAY), false);
-        source.sendSuccess(() -> Component.literal("Причина: " + result.reason()).withStyle(ChatFormatting.GRAY), false);
-        String tags = result.tags().isEmpty() ? "нет" : String.join(", ", result.tags());
-        source.sendSuccess(() -> Component.literal("Теги: " + tags).withStyle(ChatFormatting.DARK_GRAY), false);
+        source.sendSuccess(() -> Component.literal("Раздел: " + result.category().id()
+                + ". Причина: " + result.reason()).withStyle(ChatFormatting.YELLOW), false);
         return 1;
     }
 
-    private static int adminHealth(CommandSourceStack source) {
+    private static int recover(CommandSourceStack source) {
         try {
-            var health = VAuctionCore.instance().health();
-            ChatFormatting stateColor = health.attentionRequired() > 0 ? ChatFormatting.RED
-                    : health.recoveryBacklog() > 0 ? ChatFormatting.YELLOW : ChatFormatting.GREEN;
-            String state = health.attentionRequired() > 0 ? "ТРЕБУЕТ ВНИМАНИЯ"
-                    : health.recoveryBacklog() > 0 ? "ВОССТАНОВЛЕНИЕ ИДЁТ" : "НОРМА";
-            source.sendSuccess(() -> Component.literal("VAuction: " + state).withStyle(stateColor), false);
-            source.sendSuccess(() -> Component.literal("Заявки: активных " + health.activeOrders()
-                    + ", в обработке " + health.processingOrders()
-                    + ", ручная проверка " + health.manualReviewOrders()).withStyle(ChatFormatting.GRAY), false);
-            source.sendSuccess(() -> Component.literal("Сделки: ожидают завершения " + health.pendingTrades()
-                    + ", ручная проверка " + health.manualReviewTrades()).withStyle(ChatFormatting.GRAY), false);
-            source.sendSuccess(() -> Component.literal("Выдача: доступно " + health.claimableDeliveries()
-                    + ", выдаётся " + health.claimingDeliveries()
-                    + ", ошибка " + health.failedDeliveries()).withStyle(ChatFormatting.GRAY), false);
-            source.sendSuccess(() -> Component.literal("Системные операции: выполняются "
-                    + health.runningOperations() + ", ручная проверка " + health.manualReviewOperations()
-                    + "; очередь сопоставления " + health.matchingQueue()).withStyle(ChatFormatting.GRAY), false);
-            if (health.recoveryBacklog() > 0) {
-                source.sendSuccess(() -> Component.literal("[Запустить безопасный проход восстановления]")
-                        .withStyle(style -> style.withColor(ChatFormatting.AQUA)
-                                .withClickEvent(new ClickEvent(ClickEvent.Action.RUN_COMMAND,
-                                        "/ah admin recover"))), false);
-            }
+            int simple = VAuctionCore.instance().simpleAuctionService().recoverReserved(128);
+            var old = VAuctionCore.instance().runRecoverySlice();
+            source.sendSuccess(() -> Component.literal("Восстановление завершено: новых покупок " + simple
+                    + ", старых операций " + old.operationsAttempted() + ".").withStyle(ChatFormatting.GREEN), false);
             return 1;
         } catch (RuntimeException e) {
-            return fail(source, "Не удалось проверить биржу: " + e.getMessage());
+            return fail(source, "Не удалось выполнить восстановление: " + e.getMessage());
         }
-    }
-
-    private static int adminRecover(CommandSourceStack source) {
-        try {
-            var report = VAuctionCore.instance().runRecoverySlice();
-            source.sendSuccess(() -> Component.literal("Безопасный проход завершён: обработано "
-                    + report.operationsAttempted() + ", завершено сделок " + report.fillsFinished()
-                    + ", восстановлено резервов " + report.escrowsRestored()
-                    + ", изолировано выдач " + report.claimsQuarantined()
-                    + ", отправлено на ручную проверку " + report.ordersInManualReview() + ".")
-                    .withStyle(ChatFormatting.GREEN), false);
-            if (report.backlogRemaining()) {
-                source.sendSuccess(() -> Component.literal("Работа ещё осталась. Она продолжится автоматически; команду можно повторить.")
-                        .withStyle(ChatFormatting.YELLOW), false);
-            }
-            return 1;
-        } catch (RuntimeException e) {
-            return fail(source, "Восстановление не запущено: " + e.getMessage());
-        }
-    }
-
-    private static int open(CommandSourceStack source) {
-        ServerPlayer player = player(source);
-        if (player == null) return 0;
-        MarketController.instance().open(player);
-        return 1;
-    }
-
-    private static int search(CommandSourceStack source, String text) {
-        ServerPlayer player = player(source);
-        if (player == null) return 0;
-        MarketController.instance().search(player, text, 0);
-        return 1;
-    }
-
-    private static int orders(CommandSourceStack source) {
-        ServerPlayer player = player(source);
-        if (player == null) return 0;
-        MarketController.instance().openOrders(player);
-        return 1;
-    }
-
-    /**
-     * Single contextual input command. Hidden from tab completion by
-     * {@code requires} until the player owns an input draft, then applies
-     * QUANTITY or PRICE depending on which GUI flow started the draft.
-     */
-    private static int setExact(CommandSourceStack source, String text) {
-        ServerPlayer player = player(source);
-        if (player == null) return 0;
-        TradeDraft draft = MarketController.instance().inputDraft(player.getUUID());
-        if (draft == null) {
-            return fail(source, "Сначала нажмите «Другое» или «Изменить цену» в /ah.");
-        }
-        final long value;
-        if (draft.expectedInput == TradeDraft.InputTarget.PRICE) {
-            try {
-                value = CurrencyInput.parse(text);
-            } catch (CurrencyInput.InvalidPrice e) {
-                return fail(source, e.getMessage());
-            }
-        } else {
-            try {
-                if (!text.matches("[0-9]+")) throw new NumberFormatException();
-                value = Integer.parseInt(text);
-                if (value <= 0) throw new NumberFormatException();
-            } catch (NumberFormatException e) {
-                return fail(source, "Количество должно быть целым числом больше нуля.");
-            }
-        }
-        if (!MarketController.instance().setExact(player, value)) {
-            return fail(source, "Сначала нажмите «Другое» или «Изменить цену» в /ah.");
-        }
-        return 1;
-    }
-
-    private static boolean inputDraftActive(CommandSourceStack source) {
-        return source.getEntity() instanceof ServerPlayer player
-                && MarketController.instance().hasInputDraft(player.getUUID());
-    }
-
-    private static CompletableFuture<Suggestions> suggestDraftInput(CommandContext<CommandSourceStack> ctx,
-                                                                    SuggestionsBuilder builder) {
-        ServerPlayer player = ctx.getSource().getPlayer();
-        if (player != null && readySilently()) {
-            TradeDraft draft = MarketController.instance().inputDraft(player.getUUID());
-            if (draft != null && !draft.expired()) {
-                if (draft.expectedInput == TradeDraft.InputTarget.QUANTITY) {
-                    builder.suggest(1);
-                    builder.suggest(16);
-                    builder.suggest(64);
-                    int available = VAuctionCore.instance().auctionService()
-                            .availableCount(player.getUUID(), draft.unit);
-                    if (available > 0) builder.suggest(available, Component.literal("все доступные"));
-                } else {
-                    suggestPrice(builder, 1, "минимальная цена");
-                    suggestPrice(builder, majorUnits(1), null);
-                    suggestPrice(builder, majorUnits(10), null);
-                }
-            }
-        }
-        return builder.buildFuture();
-    }
-
-    private static int claims(CommandSourceStack source) {
-        ServerPlayer player = player(source);
-        if (player == null) return 0;
-        MarketController.instance().openDeliveries(player);
-        return 1;
-    }
-
-    private static int sell(CommandSourceStack source, String priceText, Integer requestedQuantity) {
-        ServerPlayer player = player(source);
-        if (player == null || !ready(source)) return 0;
-        long price = parsePrice(source, priceText);
-        if (price <= 0) return 0;
-        ItemStack unit = player.getMainHandItem();
-        if (unit.isEmpty()) return fail(source, "Возьмите продаваемый предмет в основную руку.");
-        unit = unit.copy();
-        unit.setCount(1);
-        AuctionService service = VAuctionCore.instance().auctionService();
-        int available = service.availableCount(player.getUUID(), unit);
-        int quantity = requestedQuantity == null ? available : requestedQuantity;
-        if (available <= 0 || quantity > available) {
-            return fail(source, "Недостаточно точных предметов: доступно " + available + ".");
-        }
-        return outcome(source, service.createSellOrderFromInventory(player, unit, price, quantity,
-                UUID.randomUUID()));
-    }
-
-    private static int buy(CommandContext<CommandSourceStack> ctx, int quantity, String priceText)
-            throws com.mojang.brigadier.exceptions.CommandSyntaxException {
-        CommandSourceStack source = ctx.getSource();
-        ServerPlayer player = player(source);
-        if (player == null || !ready(source)) return 0;
-        long maxPrice = parsePrice(source, priceText);
-        if (maxPrice <= 0) return 0;
-        ItemStack unit = ItemArgument.getItem(ctx, "item").createItemStack(1, false);
-        return outcome(source, VAuctionCore.instance().auctionService().createBuyOrder(
-                player.getUUID(), unit, maxPrice, quantity, UUID.randomUUID()));
-    }
-
-    private static int cancel(CommandSourceStack source, String rawId) {
-        ServerPlayer player = player(source);
-        if (player == null || !ready(source)) return 0;
-        try {
-            return outcome(source, VAuctionCore.instance().auctionService().cancel(
-                    player.getUUID(), UUID.fromString(rawId), "market-command"));
-        } catch (IllegalArgumentException e) {
-            return fail(source, "Некорректный UUID заявки. Нажмите Tab для выбора своей заявки.");
-        }
-    }
-
-    private static int claim(CommandSourceStack source, long deliveryId) {
-        ServerPlayer player = player(source);
-        if (player == null || !ready(source)) return 0;
-        return outcome(source, VAuctionCore.instance().auctionService().claimDelivery(player.getUUID(), deliveryId));
-    }
-
-    private static int info(CommandSourceStack source) {
-        ServerPlayer player = player(source);
-        if (player == null || !ready(source)) return 0;
-        ItemStack unit = player.getMainHandItem();
-        if (unit.isEmpty()) return fail(source, "Возьмите предмет в основную руку.");
-        AuctionService service = VAuctionCore.instance().auctionService();
-        MarketSummary summary = service.summary(unit);
-        if (summary == null) return fail(source, "Этот предмет нельзя выставить на биржу.");
-        int available = service.availableCount(player.getUUID(), unit);
-        source.sendSuccess(() -> Component.literal("Биржа: " + unit.getHoverName().getString()
-                + " | лучшая продажа: " + price(summary.bestAsk())
-                + " | лучшая покупка: " + price(summary.bestBid())
-                + " | у вас точных: " + available).withStyle(ChatFormatting.AQUA), false);
-        return 1;
-    }
-
-    private static int help(CommandSourceStack source) {
-        source.sendSuccess(() -> Component.literal("Биржа ValorCraft")
-                .withStyle(ChatFormatting.GOLD), false);
-        source.sendSuccess(() -> Component.literal("На бирже игроки сами покупают и продают ресурсы.")
-                .withStyle(ChatFormatting.GRAY), false);
-        source.sendSuccess(() -> Component.literal("").withStyle(ChatFormatting.GRAY), false);
-        source.sendSuccess(() -> Component.literal("Как купить:").withStyle(ChatFormatting.YELLOW), false);
-        source.sendSuccess(() -> Component.literal("Откройте /ah, нажмите на товар и выберите «Купить». Затем укажите количество и подтвердите покупку.")
-                .withStyle(ChatFormatting.GRAY), false);
-        source.sendSuccess(() -> Component.literal("").withStyle(ChatFormatting.GRAY), false);
-        source.sendSuccess(() -> Component.literal("Как продать:").withStyle(ChatFormatting.YELLOW), false);
-        source.sendSuccess(() -> Component.literal("Откройте товар и выберите «Продать». Биржа сразу покажет цену, количество и итог.")
-                .withStyle(ChatFormatting.GRAY), false);
-        source.sendSuccess(() -> Component.literal("").withStyle(ChatFormatting.GRAY), false);
-        source.sendSuccess(() -> Component.literal("Своя цена:").withStyle(ChatFormatting.YELLOW), false);
-        source.sendSuccess(() -> Component.literal("Не нравится текущая цена — нажмите «Своя цена». Заявка будет ждать подходящего предложения и исполнится сама.")
-                .withStyle(ChatFormatting.GRAY), false);
-        source.sendSuccess(() -> Component.literal("").withStyle(ChatFormatting.GRAY), false);
-        source.sendSuccess(() -> Component.literal("Моё:").withStyle(ChatFormatting.YELLOW), false);
-        source.sendSuccess(() -> Component.literal("Здесь находятся ваши активные заявки, купленные предметы и возвраты.")
-                .withStyle(ChatFormatting.GRAY), false);
-        source.sendSuccess(() -> Component.literal("").withStyle(ChatFormatting.GRAY), false);
-        helpLine(source, "/ah search <название>", "найти товар");
-        source.sendSuccess(() -> Component.literal("[Открыть биржу]").withStyle(style -> style
-                .withColor(ChatFormatting.GREEN)
-                .withClickEvent(new ClickEvent(ClickEvent.Action.RUN_COMMAND, "/ah"))), false);
-        source.sendSuccess(() -> Component.literal("[Дополнительные команды]").withStyle(style -> style
-                .withColor(ChatFormatting.DARK_GRAY)
-                .withClickEvent(new ClickEvent(ClickEvent.Action.RUN_COMMAND, "/ah help commands"))), false);
-        return 1;
-    }
-
-    private static int helpCommands(CommandSourceStack source) {
-        source.sendSuccess(() -> Component.literal("Дополнительные команды:")
-                .withStyle(ChatFormatting.GOLD), false);
-        helpLine(source, "/ah search <название>", "найти товар");
-        helpLine(source, "/ah sell <цена> [количество]", "создать заявку на продажу предмета из руки");
-        helpLine(source, "/ah buy <предмет> <количество> <цена>", "создать заявку на покупку");
-        source.sendSuccess(() -> Component.literal("Пример цены: " + CurrencyInput.example())
-                .withStyle(ChatFormatting.GRAY), false);
-        source.sendSuccess(() -> Component.literal("Остальное делается в меню: /ah и «Моё».")
-                .withStyle(ChatFormatting.GRAY), false);
-        return 1;
-    }
-
-    private static int helpSell(CommandSourceStack source) {
-        helpLine(source, "/ah sell <цена> [количество]",
-                "заявка на продажу точного предмета из основной руки; без количества — все совпадающие предметы");
-        source.sendSuccess(() -> Component.literal("Пример: /ah sell " + CurrencyInput.example() + " 1")
-                .withStyle(ChatFormatting.GRAY), false);
-        return 1;
-    }
-
-    private static int helpBuy(CommandSourceStack source) {
-        helpLine(source, "/ah buy <предмет> <количество> <цена>",
-                "заявка на покупку обычного предмета; точный вариант с особыми свойствами выбирайте в GUI");
-        source.sendSuccess(() -> Component.literal("Пример: /ah buy minecraft:stone 1 " + CurrencyInput.example())
-                .withStyle(ChatFormatting.GRAY), false);
-        return 1;
-    }
-
-    private static void helpLine(CommandSourceStack source, String command, String description) {
-        MutableComponent line = Component.literal(command).withStyle(style -> style
-                .withColor(ChatFormatting.AQUA)
-                .withClickEvent(new ClickEvent(ClickEvent.Action.SUGGEST_COMMAND, command)))
-                .append(Component.literal(" — " + description).withStyle(ChatFormatting.GRAY));
-        source.sendSuccess(() -> line, false);
-    }
-
-    private static CompletableFuture<Suggestions> suggestItems(CommandContext<CommandSourceStack> ctx,
-                                                               SuggestionsBuilder builder) {
-        return SharedSuggestionProvider.suggestResource(BuiltInRegistries.ITEM.keySet(), builder);
-    }
-
-    private static CompletableFuture<Suggestions> suggestOrders(CommandContext<CommandSourceStack> ctx,
-                                                                SuggestionsBuilder builder) {
-        ServerPlayer player = ctx.getSource().getPlayer();
-        if (player != null && readySilently()) {
-            for (Order order : read().playerOrders(player.getUUID(), 0).items()) {
-                if (order.isActive()) builder.suggest(order.orderId().toString(),
-                        Component.literal(order.item().displayName()));
-            }
-        }
-        return builder.buildFuture();
-    }
-
-    private static CompletableFuture<Suggestions> suggestClaims(CommandContext<CommandSourceStack> ctx,
-                                                                SuggestionsBuilder builder) {
-        ServerPlayer player = ctx.getSource().getPlayer();
-        if (player != null && readySilently()) {
-            for (AuctionDelivery delivery : read().deliveries(player.getUUID(), 0).items()) {
-                builder.suggest(Long.toString(delivery.deliveryId()), Component.literal(delivery.item().displayName()));
-            }
-        }
-        return builder.buildFuture();
-    }
-
-    private static CompletableFuture<Suggestions> suggestQuantities(CommandContext<CommandSourceStack> ctx,
-                                                                    SuggestionsBuilder builder) {
-        ServerPlayer player = ctx.getSource().getPlayer();
-        if (player != null && readySilently() && !player.getMainHandItem().isEmpty()) {
-            int available = VAuctionCore.instance().auctionService().availableCount(
-                    player.getUUID(), player.getMainHandItem());
-            if (available > 0) builder.suggest(available, Component.literal("все точные предметы"));
-            int stack = player.getMainHandItem().getCount();
-            if (stack > 1 && stack != available) builder.suggest(stack, Component.literal("стек в руке"));
-        }
-        builder.suggest(1);
-        builder.suggest(16);
-        builder.suggest(64);
-        return builder.buildFuture();
-    }
-
-    private static CompletableFuture<Suggestions> suggestCommonQuantities(CommandContext<CommandSourceStack> ctx,
-                                                                          SuggestionsBuilder builder) {
-        builder.suggest(1); builder.suggest(16); builder.suggest(64);
-        return builder.buildFuture();
     }
 
     private static CompletableFuture<Suggestions> suggestPrices(CommandContext<CommandSourceStack> ctx,
-                                                                SuggestionsBuilder builder)
-            throws com.mojang.brigadier.exceptions.CommandSyntaxException {
-        if (readySilently()) {
-            ItemStack unit = ctx.getNodes().stream().anyMatch(node -> "item".equals(node.getNode().getName()))
-                    ? ItemArgument.getItem(ctx, "item").createItemStack(1, false)
-                    : ctx.getSource().getPlayer() == null ? ItemStack.EMPTY
-                    : ctx.getSource().getPlayer().getMainHandItem();
-            if (!unit.isEmpty()) {
-                MarketSummary summary = VAuctionCore.instance().auctionService().summary(unit);
-                if (summary != null) {
-                    if (summary.bestAsk() > 0) suggestPrice(builder, summary.bestAsk(), "лучшая продажа");
-                    if (summary.bestBid() > 0) suggestPrice(builder, summary.bestBid(), "лучшая покупка");
-                    if (summary.lastTradePrice() > 0) suggestPrice(builder, summary.lastTradePrice(), "последняя сделка");
-                }
-            }
-        }
-        suggestPrice(builder, 1, "минимальная цена");
-        suggestPrice(builder, majorUnits(1), null);
-        suggestPrice(builder, majorUnits(10), null);
-        suggestPrice(builder, majorUnits(100), null);
+                                                                SuggestionsBuilder builder) {
+        suggest(builder, minor(1)); suggest(builder, minor(10)); suggest(builder, minor(100));
         return builder.buildFuture();
     }
 
-    private static long parsePrice(CommandSourceStack source, String text) {
-        try {
-            return CurrencyInput.parse(text);
-        } catch (CurrencyInput.InvalidPrice e) {
-            fail(source, e.getMessage());
-            return -1;
-        }
+    private static long minor(long major) {
+        try { return Math.multiplyExact(major, BigDecimal.TEN.pow(CurrencyText.decimalPlaces()).longValueExact()); }
+        catch (RuntimeException e) { return major; }
     }
 
-    private static long majorUnits(long amount) {
-        try {
-            return Math.multiplyExact(amount, BigDecimal.TEN.pow(CurrencyText.decimalPlaces()).longValueExact());
-        } catch (ArithmeticException | IllegalStateException e) {
-            return amount;
-        }
+    private static void suggest(SuggestionsBuilder builder, long minor) {
+        try { builder.suggest(CurrencyInput.formatAmount(minor)); } catch (RuntimeException ignored) {}
     }
 
-    private static void suggestPrice(SuggestionsBuilder builder, long minor, String tooltip) {
-        final String value;
-        try {
-            value = CurrencyInput.formatAmount(minor);
-        } catch (IllegalStateException e) {
-            return;
-        }
-        if (tooltip == null) builder.suggest(value);
-        else builder.suggest(value, Component.literal(tooltip));
+    private static boolean ready(CommandSourceStack source) {
+        if (VAuctionCore.instance().isRunning() && VAuctionCore.instance().simpleAuctionService() != null) return true;
+        fail(source, "Аукцион сейчас недоступен.");
+        return false;
     }
 
-    private static int outcome(CommandSourceStack source, AuctionService.Outcome result) {
-        if (result.isSuccess()) {
-            String message;
-            if (result.status() == AuctionService.Result.ACCEPTED_PENDING) {
-                message = "Операция принята и безопасно завершается.";
-            } else if (result.order() == null) {
-                message = result.message();
-            } else if (result.order().status() == com.valorcraft.vauction.domain.order.OrderStatus.CANCELLED) {
-                message = "Заявка отменена; возврат доступен в «Моём».";
-            } else if (result.order().remainingQuantity() == 0) {
-                message = "Заявка исполнена полностью.";
-            } else if (result.filledQuantity() > 0) {
-                message = "Исполнено " + result.filledQuantity() + ", осталось "
-                        + result.order().remainingQuantity() + "; заявка продолжает ждать.";
-            } else {
-                message = "Заявка создана и ждёт подходящего предложения.";
-            }
-            source.sendSuccess(() -> Component.literal(message)
-                    .withStyle(ChatFormatting.GREEN), false);
-            if (result.order() != null) {
-                String command = result.order().remainingQuantity() == 0
-                        && result.order().side() == com.valorcraft.vauction.domain.order.OrderSide.BUY
-                        ? "/ah claims" : "/ah orders";
-                String label = "[Моё]";
-                source.sendSuccess(() -> Component.literal(label).withStyle(style -> style
-                        .withColor(ChatFormatting.AQUA)
-                        .withClickEvent(new ClickEvent(ClickEvent.Action.RUN_COMMAND, command))), false);
-            }
-            return 1;
-        }
-        return fail(source, result.message());
+    private static ServerPlayer player(CommandSourceStack source) {
+        if (source.getEntity() instanceof ServerPlayer player) return player;
+        fail(source, "Команда доступна только игрокам.");
+        return null;
     }
 
     private static int fail(CommandSourceStack source, String text) {
         source.sendFailure(Component.literal(text).withStyle(ChatFormatting.RED));
         return 0;
-    }
-
-    private static ServerPlayer player(CommandSourceStack source) {
-        if (source.getEntity() instanceof ServerPlayer player) return player;
-        source.sendFailure(Component.literal("Команда доступна только игрокам.").withStyle(ChatFormatting.RED));
-        return null;
-    }
-
-    private static boolean ready(CommandSourceStack source) {
-        if (readySilently()) return true;
-        fail(source, "Биржа сейчас недоступна.");
-        return false;
-    }
-
-    private static boolean readySilently() {
-        return VAuctionCore.instance().isRunning()
-                && VAuctionCore.instance().auctionService() != null
-                && VAuctionCore.instance().auctionReadService() != null;
-    }
-
-    private static AuctionReadService read() {
-        return VAuctionCore.instance().auctionReadService();
-    }
-
-    private static String price(long value) {
-        return value <= 0 ? "—" : CurrencyText.format(value);
     }
 }

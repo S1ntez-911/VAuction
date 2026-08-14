@@ -203,6 +203,22 @@ public final class OrderRepository {
         }
     }
 
+    /** Modern UUID-backed orders that can be safely closed during the simple-market cutover. */
+    public List<UUID> activeUuidOrderIds(Connection c, int limit) {
+        String sql = "SELECT order_id FROM auction_orders WHERE status='ACTIVE' "
+                + "AND processing_state='NONE' AND length(order_id)=36 ORDER BY created_at LIMIT ?";
+        try (PreparedStatement ps = c.prepareStatement(sql)) {
+            ps.setInt(1, Math.max(1, limit));
+            try (ResultSet rs = ps.executeQuery()) {
+                List<UUID> out = new ArrayList<>();
+                while (rs.next()) out.add(UUID.fromString(rs.getString(1)));
+                return out;
+            }
+        } catch (SQLException e) {
+            throw new DatabaseException("active UUID order ids failed", e);
+        }
+    }
+
     /** Bounded newest-first page for the player GUI (all statuses, no history scan in Java). */
     public List<Order> pageForOwner(Connection c, UUID ownerUuid, int offset, int limit) {
         String sql = "SELECT " + COLUMNS + " FROM auction_orders WHERE owner_uuid = ? "
