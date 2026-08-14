@@ -142,6 +142,32 @@ tasks.register('verifyProductionJar') {
             throw new GradleException("Production jar embeds forbidden Minecraft/Forge/Brigadier classes: ${forbidden}")
         }
 
+        // Refuse incomplete incremental artifacts: every compiled VAuction
+        // class must also be present in the server-ready jar.
+        Set<String> expectedClasses = [] as Set
+        sourceSets.main.output.classesDirs.files.findAll { it.isDirectory() }.each { classesDir ->
+            fileTree(classesDir).matching { include 'com/valorcraft/vauction/**/*.class' }.files.each { classFile ->
+                expectedClasses.add(classesDir.toPath().relativize(classFile.toPath())
+                        .toString().replace(File.separatorChar, '/' as char))
+            }
+        }
+        Set<String> packagedClasses = [] as Set
+        new java.util.zip.ZipFile(productionJar).withCloseable { zip ->
+            zip.entries().each { entry ->
+                if (!entry.directory && entry.name.startsWith('com/valorcraft/vauction/')
+                        && entry.name.endsWith('.class')) {
+                    packagedClasses.add(entry.name)
+                }
+            }
+        }
+        Set<String> missingClasses = expectedClasses - packagedClasses
+        if (!missingClasses.empty) {
+            throw new GradleException("Production jar is missing compiled VAuction classes: ${missingClasses.sort()}")
+        }
+        if (!packagedClasses.contains('com/valorcraft/vauction/domain/delivery/DeliveryType.class')) {
+            throw new GradleException('Production jar is missing critical DeliveryType.class')
+        }
+
         File javac = java17Compiler.get().executablePath.asFile
         File javap = new File(javac.parentFile,
                 System.getProperty('os.name').toLowerCase(Locale.ROOT).contains('windows') ? 'javap.exe' : 'javap')

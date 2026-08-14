@@ -77,7 +77,7 @@ public final class MarketController {
         if (action == null) return;
         s.executing = true;
         try { handle(player, s, action); }
-        catch (RuntimeException e) {
+        catch (RuntimeException | LinkageError e) {
             LOGGER.error("Simple auction UI action failed player={} action={}", player.getUUID(), action.type(), e);
             tell(player, "Аукцион временно недоступен.", ChatFormatting.RED);
             MarketSounds.error(player);
