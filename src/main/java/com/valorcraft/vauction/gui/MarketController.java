@@ -7,6 +7,7 @@ import com.valorcraft.vauction.bootstrap.VAuctionCore;
 import com.valorcraft.vauction.domain.delivery.AuctionDelivery;
 import com.valorcraft.vauction.domain.listing.AuctionListing;
 import com.valorcraft.vauction.item.ItemCodecException;
+import com.valorcraft.vauction.item.StoredContents;
 import net.minecraft.ChatFormatting;
 import net.minecraft.network.chat.Component;
 import net.minecraft.network.protocol.game.ClientboundContainerSetContentPacket;
@@ -27,7 +28,7 @@ import java.util.Map;
 import java.util.UUID;
 import java.util.concurrent.ConcurrentHashMap;
 
-/** One catalogue, one purchase confirmation, no order-book concepts in the player UI. */
+/** Catalogue, purchase confirmation and a fixed read-only storage preview. */
 public final class MarketController {
     static final int CONFIRM_BACK = 45;
     static final int CONFIRM_PRIMARY = 49;
@@ -96,8 +97,17 @@ public final class MarketController {
             }
             case OPEN_LISTING -> openListing(player, s, action.listingId());
             case CONFIRM_PURCHASE -> purchase(player, s, action.listingId());
+            case OPEN_CONTENTS -> {
+                s.contentsPage = 0;
+                openContents(player, s, action.listingId());
+            }
+            case CONTENTS_PAGE -> {
+                s.contentsPage = Math.max(0, s.contentsPage + action.number());
+                openContents(player, s, action.listingId());
+            }
             case CLAIM_ALL -> { claimAll(player); renderCatalogue(player, s); }
             case BACK -> { s.screen = MarketScreen.BROWSE; renderCatalogue(player, s); }
+            case BACK_TO_LISTING -> openListing(player, s, action.listingId());
         }
     }
 
@@ -116,6 +126,7 @@ public final class MarketController {
         s.resetActions();
         SimpleContainer box = new SimpleContainer(54);
         ItemStack exact = decode(listing);
+        StoredContents.Inspection contents = StoredContents.inspect(exact);
         box.setItem(22, listingCard(player, listing, exact, true));
         put(box, s, CONFIRM_BACK, GuiItems.namedButton(new ItemStack(Items.ARROW),
                 "Назад", ChatFormatting.GRAY, "Вернуться к каталогу"), GuiAction.simple(GuiAction.Type.BACK));
@@ -123,7 +134,51 @@ public final class MarketController {
                 "Купить за " + CurrencyText.format(listing.priceMinor()), ChatFormatting.GREEN,
                 "Вы получите весь показанный лот"),
                 GuiAction.listing(GuiAction.Type.CONFIRM_PURCHASE, listingId));
+        if (contents.readable() && contents.hasItems()) {
+            put(box, s, 47, GuiItems.namedButton(new ItemStack(Items.CHEST),
+                    "Посмотреть содержимое", ChatFormatting.AQUA,
+                    "Ячеек занято: " + contents.occupiedItemSlots(),
+                    "Просмотр без возможности забрать предметы"),
+                    GuiAction.listing(GuiAction.Type.OPEN_CONTENTS, listingId));
+        }
         openBox(player, s, box, "Купить лот?");
+    }
+
+    private void openContents(ServerPlayer player, MarketSession s, long listingId) {
+        AuctionListing listing = service().find(listingId);
+        if (listing == null || listing.status() != com.valorcraft.vauction.domain.listing.ListingStatus.ACTIVE) {
+            tell(player, "Этот лот уже недоступен.", ChatFormatting.RED);
+            renderCatalogue(player, s);
+            return;
+        }
+        StoredContents.Inspection contents = StoredContents.inspect(decode(listing));
+        if (!contents.readable() || !contents.hasItems()) {
+            tell(player, "Содержимое этого хранилища недоступно для просмотра.", ChatFormatting.RED);
+            openListing(player, s, listingId);
+            return;
+        }
+        final int pageSize = 45;
+        int pages = Math.max(1, (contents.slots().size() + pageSize - 1) / pageSize);
+        s.contentsPage = Math.min(s.contentsPage, pages - 1);
+        int start = s.contentsPage * pageSize;
+        int end = Math.min(contents.slots().size(), start + pageSize);
+        s.screen = MarketScreen.CONTENTS_PREVIEW;
+        s.resetActions();
+        SimpleContainer box = new SimpleContainer(54);
+        for (int sourceSlot = start; sourceSlot < end; sourceSlot++) {
+            ItemStack contained = contents.slots().get(sourceSlot);
+            if (!contained.isEmpty()) box.setItem(sourceSlot - start, contained.copy());
+        }
+        boolean previous = s.contentsPage > 0;
+        boolean next = s.contentsPage + 1 < pages;
+        put(box, s, 45, previewArrow(false, previous), previous
+                ? GuiAction.listingPage(GuiAction.Type.CONTENTS_PAGE, listingId, -1) : null);
+        put(box, s, 49, GuiItems.namedButton(new ItemStack(Items.ARROW),
+                "Назад к покупке", ChatFormatting.YELLOW, "Вернуться к карточке лота"),
+                GuiAction.listing(GuiAction.Type.BACK_TO_LISTING, listingId));
+        put(box, s, 53, previewArrow(true, next), next
+                ? GuiAction.listingPage(GuiAction.Type.CONTENTS_PAGE, listingId, 1) : null);
+        openBox(player, s, box, "Содержимое • " + (s.contentsPage + 1) + "/" + pages);
     }
 
     private void purchase(ServerPlayer player, MarketSession s, long listingId) {
@@ -253,9 +308,39 @@ public final class MarketController {
                         : own ? "ЛКМ: снять лот" : "ЛКМ: купить весь лот",
                 own ? "warning" : "success"));
         List<Component> lines = UiConfig.lines("listingCard", values);
+        appendStoredContents(lines, StoredContents.inspect(exact));
         // Catalogue cards stay compact; the confirmation deliberately shows the
         // exact native NBT tooltip so modded variants can be distinguished before paying.
         return confirm ? GuiItems.decorateMarketItem(exact, lines) : GuiItems.marketDisplay(exact, lines);
+    }
+
+    private static void appendStoredContents(List<Component> lines, StoredContents.Inspection contents) {
+        if (contents == null || !contents.readable()) return;
+        if (contents.hasItems()) {
+            lines.add(Component.literal("Содержимое: " + contents.occupiedItemSlots()
+                    + " яч., " + contents.itemCount() + " предметов").withStyle(ChatFormatting.AQUA));
+        }
+        int shown = 0;
+        int total = 0;
+        for (StoredContents.FluidEntry entry : contents.fluids()) {
+            if (entry.fluid().isEmpty() || entry.fluid().getAmount() <= 0) continue;
+            total++;
+            if (shown++ >= 5) continue;
+            Component line = Component.literal("Жидкость: ").withStyle(ChatFormatting.AQUA)
+                    .append(entry.fluid().getDisplayName().copy().withStyle(ChatFormatting.WHITE))
+                    .append(Component.literal(" • " + entry.fluid().getAmount() + " / "
+                            + entry.capacity() + " mB").withStyle(ChatFormatting.GRAY));
+            lines.add(line);
+        }
+        if (total > 5) lines.add(Component.literal("Ещё резервуаров: " + (total - 5))
+                .withStyle(ChatFormatting.DARK_GRAY));
+    }
+
+    private static ItemStack previewArrow(boolean forward, boolean enabled) {
+        return GuiItems.namedButton(new ItemStack(Items.ARROW),
+                forward ? "Следующая страница" : "Предыдущая страница",
+                enabled ? ChatFormatting.AQUA : ChatFormatting.DARK_GRAY,
+                enabled ? "Нажмите для перехода" : "Других страниц нет");
     }
 
     private static String sellerName(ServerPlayer viewer, UUID seller) {

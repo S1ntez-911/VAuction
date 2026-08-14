@@ -56,7 +56,7 @@ public record AuctionSettings(
                 90,                     // historyRetentionDays
                 30,                     // catalogueHistoryDays
                 false,                  // allowSelfPurchase
-                false,                  // allowContainersWithContents
+                true,                   // allowContainersWithContents (guarded by exact round-trip validation)
                 false,                  // blockCustomNbt: MarketKey разделяет по полному NBT, контент не теряется
                 true,                   // allowEnchantedBooks
                 262_144,                // maxCompressedItemBytes
@@ -64,8 +64,7 @@ public record AuctionSettings(
                 7,                      // sellOrderExpiryDays
                 3,                      // buyOrderExpiryDays
                 ItemPolicyMode.BLACKLIST,
-                List.of("minecraft:shulker_box",
-                        "minecraft:written_book", "minecraft:enchanted_book"),
+                List.of("minecraft:written_book", "minecraft:enchanted_book"),
                 List.of(),
                 List.of(),
                 List.of()

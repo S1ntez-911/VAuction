@@ -68,8 +68,9 @@ public final class AuctionConfig {
 
             b.comment("Предметы и NBT").push("items");
             allowContainersWithContents = b
-                    .comment("Разрешать шалкеры/контейнеры с содержимым (опасно для баланса).")
-                    .define("allow_containers_with_contents", false);
+                    .comment("Разрешать хранилища с предметами или жидкостями.",
+                            "Перед созданием лота VAuction проверяет точное восстановление содержимого.")
+                    .define("allow_containers_with_contents", true);
             blockCustomNbt = b
                     .comment("Запрещать предметы с нестандартным NBT (кроме повреждений).",
                             "false = предметы с тегами торгуются: MarketKey разделяет стакан по полному NBT, контент не теряется.")
@@ -82,10 +83,9 @@ public final class AuctionConfig {
                     .defineEnum("item_policy_mode", ItemPolicyMode.BLACKLIST);
             blacklistItems = b
                     .comment("Полные ID предметов, запрещённые к торговле.",
-                            "Пример: minecraft:shulker_box, minecraft:written_book")
+                            "Пример: minecraft:written_book")
                     .defineListAllowEmpty("blacklist_items",
-                            Arrays.asList("minecraft:shulker_box",
-                                    "minecraft:written_book", "minecraft:enchanted_book"),
+                            Arrays.asList("minecraft:written_book", "minecraft:enchanted_book"),
                             s -> s instanceof String s2 && s2.matches("[a-z0-9_.]+:[a-z0-9_./-]+"));
             blacklistTags = b
                     .comment("Теги предметов, запрещённые к торговле (например minecraft:black_dyes).")

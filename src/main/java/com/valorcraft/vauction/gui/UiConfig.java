@@ -29,7 +29,7 @@ import java.util.Set;
 /** One-file configuration for the only configurable screen: the auction catalogue. */
 public final class UiConfig {
     private static final Logger LOGGER = LogManager.getLogger("VAuction/UI");
-    private static final int FORMAT = 1;
+    private static final int FORMAT = 2;
     private static final Set<String> CONTROL_KEYS = Set.of(
             "empty", "previous", "categories", "refresh", "info", "my", "next");
     private static final Set<String> BUTTON_KEYS = Set.of(
@@ -55,7 +55,7 @@ public final class UiConfig {
             Map.entry("info", button(Items.PAPER, "Страница {page} / {pages}", "{mode}")),
             Map.entry("empty", button(Items.PAPER, "Подходящих лотов нет", "/ah sell <цена>")));
     private static final List<String> DEFAULT_CARD = List.of(
-            "value:listing.price", "value:listing.quantity", "value:listing.seller",
+            "value:listing.price", "value:listing.seller",
             "empty", "value:listing.action");
 
     record LineValue(String labelKey, String text, String colorKey) {}
@@ -93,9 +93,13 @@ public final class UiConfig {
             if (!Files.exists(file)) Files.writeString(file, defaultJson(), StandardCharsets.UTF_8);
             JsonElement parsed = JsonParser.parseString(Files.readString(file, StandardCharsets.UTF_8));
             if (!parsed.isJsonObject()) throw new IllegalArgumentException("Корень auction-ui.json должен быть объектом");
-            Snapshot next = parse(parsed.getAsJsonObject());
+            JsonObject root = parsed.getAsJsonObject();
+            boolean migrated = migrate(root);
+            Snapshot next = parse(root);
             current = next;
             MarketPalette.replace(next.colors());
+            if (migrated) Files.writeString(file,
+                    new GsonBuilder().setPrettyPrinting().create().toJson(root), StandardCharsets.UTF_8);
             Files.writeString(file.resolveSibling("AUCTION-UI-README.txt"), readme(), StandardCharsets.UTF_8);
             return null;
         } catch (Exception e) {
@@ -222,6 +226,24 @@ public final class UiConfig {
                 Map.copyOf(buttons), Map.copyOf(texts), List.copyOf(card), decoration, Map.copyOf(colors));
     }
 
+    /** Format 2 uses the vanilla stack count and removes the redundant quantity lore line. */
+    private static boolean migrate(JsonObject root) {
+        int format = integer(root, "format", 1);
+        if (format >= FORMAT) return false;
+        JsonObject card = object(root, "listingCard");
+        JsonElement lore = card.get("lore");
+        if (lore != null && lore.isJsonArray()) {
+            JsonArray updated = new JsonArray();
+            for (JsonElement token : lore.getAsJsonArray()) {
+                if (!"value:listing.quantity".equals(token.getAsString())) updated.add(token.deepCopy());
+            }
+            card.add("lore", updated);
+            root.add("listingCard", card);
+        }
+        root.addProperty("format", FORMAT);
+        return true;
+    }
+
     private static void validateSlots(int capacity, List<Integer> content, Map<String, Integer> controls) {
         Set<Integer> used = new java.util.HashSet<>();
         for (int slot : content) {
@@ -250,7 +272,7 @@ public final class UiConfig {
     private static String defaultJson() {
         JsonObject root = new JsonObject();
         root.addProperty("format", FORMAT);
-        root.addProperty("help", "Единственный настраиваемый экран: catalogue. Подтверждение покупки фиксировано кодом.");
+        root.addProperty("help", "Единственный настраиваемый экран: catalogue. Подтверждение покупки и просмотр хранилища фиксированы кодом.");
         JsonObject catalogue = new JsonObject();
         catalogue.addProperty("rows", 6);
         catalogue.addProperty("title", "Аукцион • {mode} • {page}/{pages}");
@@ -288,7 +310,7 @@ public final class UiConfig {
                 VAuction: настройка интерфейса
 
                 Файл: auction-ui.json
-                Настраивается только основной каталог. Экран подтверждения покупки фиксирован.
+                Настраивается только основной каталог. Подтверждение покупки и безопасный просмотр хранилища фиксированы.
 
                 catalogue.rows: 1..6 рядов, по 9 слотов.
                 catalogue.title: заголовок. Плейсхолдеры: {player}, {mode}, {category}, {search}, {page}, {pages}, {results}.
@@ -300,7 +322,6 @@ public final class UiConfig {
                 buttons: предмет, название, описание и цвета кнопок.
                 listingCard.lore: порядок строк карточки. Доступно:
                   value:listing.price
-                  value:listing.quantity
                   value:listing.seller
                   value:listing.action
                   empty

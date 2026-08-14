@@ -38,10 +38,12 @@ class ServerOnlyGuiStructureTest {
     }
 
     @Test
-    void uiHasOneCatalogueAndOnePurchaseConfirmation() throws Exception {
+    void uiHasCataloguePurchaseConfirmationAndReadOnlyContentsPreview() throws Exception {
         String controller = source("com/valorcraft/vauction/gui/MarketController.java");
         assertTrue(controller.contains("renderCatalogue"));
         assertTrue(controller.contains("CONFIRM_PURCHASE"));
+        assertTrue(controller.contains("CONTENTS_PREVIEW"));
+        assertTrue(controller.contains("StoredContents.inspect"));
         assertTrue(controller.contains("TOGGLE_MINE"));
         assertTrue(controller.contains("NEXT_CATEGORY"));
         assertTrue(controller.contains("CLAIM_ALL"));
@@ -84,7 +86,7 @@ class ServerOnlyGuiStructureTest {
         assertTrue(controller.contains("GuiItems.marketDisplay"));
         assertTrue(controller.contains("GuiItems.decorateMarketItem"));
         assertTrue(items.contains("new ItemStack(realItem.getItem())"));
-        assertTrue(items.contains("visual.setCount(Math.max(1, realItem.getCount()))"));
+        assertTrue(items.contains("result.setCount(Math.max(1, realItem.getCount()))"));
     }
 
     @Test

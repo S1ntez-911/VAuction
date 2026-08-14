@@ -35,6 +35,7 @@ class UiConfigTest {
         assertTrue(Files.isRegularFile(file()));
         assertTrue(Files.isRegularFile(root().resolve("AUCTION-UI-README.txt")));
         JsonObject json = JsonParser.parseString(Files.readString(file(), StandardCharsets.UTF_8)).getAsJsonObject();
+        assertEquals(2, json.get("format").getAsInt());
         assertTrue(json.has("catalogue"));
         assertTrue(json.has("listingCard"));
         assertFalse(json.has("screens"));
@@ -42,6 +43,22 @@ class UiConfigTest {
             assertFalse(json.has(old), "legacy screen leaked into new config: " + old);
         }
         assertEquals(45, UiConfig.slots("catalogue", "content").length);
+    }
+
+    @Test
+    void formatOneMigratesFromQuantityLoreToVanillaStackCount() throws Exception {
+        UiConfig.start(temp);
+        JsonObject json = JsonParser.parseString(Files.readString(file(), StandardCharsets.UTF_8)).getAsJsonObject();
+        json.addProperty("format", 1);
+        com.google.gson.JsonArray lore = json.getAsJsonObject("listingCard").getAsJsonArray("lore");
+        lore.add("value:listing.quantity");
+        Files.writeString(file(), json.toString(), StandardCharsets.UTF_8);
+
+        assertNull(UiConfig.reload());
+        JsonObject migrated = JsonParser.parseString(Files.readString(file(), StandardCharsets.UTF_8)).getAsJsonObject();
+        assertEquals(2, migrated.get("format").getAsInt());
+        assertFalse(migrated.getAsJsonObject("listingCard").getAsJsonArray("lore").toString()
+                .contains("listing.quantity"));
     }
 
     @Test
@@ -112,6 +129,6 @@ class UiConfigTest {
         values.put("listing.quantity", new UiConfig.LineValue("listing.quantityLabel", "8", "text"));
         values.put("listing.seller", new UiConfig.LineValue("listing.sellerLabel", "Alex", "muted"));
         values.put("listing.action", new UiConfig.LineValue(null, "Купить", "success"));
-        assertEquals(5, UiConfig.lines("listingCard", values).size());
+        assertEquals(4, UiConfig.lines("listingCard", values).size());
     }
 }

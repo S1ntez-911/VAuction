@@ -45,7 +45,7 @@ class GuiItemsTest {
                 Component.literal("Купить: 32"), Component.literal("ЛКМ — открыть")));
 
         assertNotSame(source, decorated);
-        assertEquals(1, decorated.getCount());
+        assertEquals(17, decorated.getCount());
         assertEquals("Закалённый медный слиток", decorated.getHoverName().getString());
         assertEquals(source.getHoverName().getStyle().getColor(), decorated.getHoverName().getStyle().getColor());
         assertEquals(42, decorated.getDamageValue());
@@ -72,7 +72,7 @@ class GuiItemsTest {
 
     @Test
     void cleanMarketDisplayDoesNotCarryClientMaterialTooltipData() {
-        ItemStack real = new ItemStack(Items.GLOWSTONE);
+        ItemStack real = new ItemStack(Items.GLOWSTONE, 64);
         real.setHoverName(Component.literal("Светокамень"));
         real.getOrCreateTag().putString("ChemicalFormula", "oversized-client-tooltip");
 
@@ -83,6 +83,7 @@ class GuiItemsTest {
         assertEquals("Светокамень", display.getHoverName().getString());
         assertTrue(display.getTag() == null || !display.getTag().contains("ChemicalFormula"));
         assertEquals(127, display.getTag().getInt("HideFlags"));
+        assertEquals(real.getCount(), display.getCount());
         assertEquals("oversized-client-tooltip", real.getTag().getString("ChemicalFormula"));
     }
 }

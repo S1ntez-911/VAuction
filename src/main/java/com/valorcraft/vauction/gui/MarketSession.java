@@ -13,6 +13,7 @@ final class MarketSession {
     final Map<String, String> placeholders = new LinkedHashMap<>();
     MarketScreen screen = MarketScreen.BROWSE;
     int cataloguePage;
+    int contentsPage;
     String search = "";
     boolean mineOnly;
     boolean transitioning;

@@ -38,7 +38,6 @@ final class GuiItems {
     static ItemStack decorateMarketItem(ItemStack source, List<Component> marketLines) {
         ItemStack result = source.copy();
         if (result.isEmpty()) return result;
-        result.setCount(1);
         CompoundTag display = result.getOrCreateTagElement("display");
         ListTag lore = display.contains("Lore", net.minecraft.nbt.Tag.TAG_LIST)
                 ? display.getList("Lore", net.minecraft.nbt.Tag.TAG_STRING).copy()
@@ -64,10 +63,11 @@ final class GuiItems {
         ItemStack visual = realItem == null || realItem.isEmpty()
                 ? ItemStack.EMPTY : new ItemStack(realItem.getItem());
         if (visual.isEmpty()) return visual;
-        visual.setCount(Math.max(1, realItem.getCount()));
         visual.setHoverName(name);
         visual.getOrCreateTag().putInt("HideFlags", 127);
-        return namedButton(visual, name, marketLines);
+        ItemStack result = namedButton(visual, name, marketLines);
+        result.setCount(Math.max(1, realItem.getCount()));
+        return result;
     }
 
     static void setLore(ItemStack stack, List<String> lines) {

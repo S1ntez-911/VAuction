@@ -16,6 +16,7 @@ import com.valorcraft.vauction.item.ItemPolicy;
 import com.valorcraft.vauction.item.ItemSnapshot;
 import com.valorcraft.vauction.item.ItemStackCodec;
 import com.valorcraft.vauction.item.MarketCategoryClassifier;
+import com.valorcraft.vauction.item.StoredContents;
 import com.valorcraft.vauction.persistence.DatabaseException;
 import com.valorcraft.vauction.persistence.DatabaseManager;
 import com.valorcraft.vauction.persistence.DeliveryRepository;
@@ -106,9 +107,24 @@ public final class SimpleAuctionService {
         }
 
         ItemStack custody = heldStack.copy();
+        StoredContents.Inspection originalContents = StoredContents.inspect(custody);
+        if (!originalContents.readable()) {
+            return Outcome.fail(Result.INVALID_ITEM,
+                    "Не удалось безопасно прочитать содержимое этого хранилища.");
+        }
+        if (!settings.allowContainersWithContents() && originalContents.hasContents()) {
+            return Outcome.fail(Result.INVALID_ITEM,
+                    "Продажа наполненных хранилищ отключена в настройках аукциона.");
+        }
         ItemSnapshot snapshot;
         try {
             snapshot = codec.encode(custody);
+            ItemStack restored = codec.decode(snapshot);
+            StoredContents.Inspection restoredContents = StoredContents.inspect(restored);
+            if (!StoredContents.same(originalContents, restoredContents)) {
+                return Outcome.fail(Result.INVALID_ITEM,
+                        "Это хранилище нельзя продать безопасно: содержимое не восстанавливается без изменений.");
+            }
         } catch (ItemCodecException e) {
             return Outcome.fail(Result.INVALID_ITEM, "Не удалось сохранить все данные предмета.");
         }
