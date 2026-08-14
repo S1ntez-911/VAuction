@@ -100,6 +100,22 @@ class DatabaseTest {
     }
 
     @Test
+    void linkageErrorRollsBackTransactionBeforeAutocommitIsRestored() {
+        ListingRepository listings = new ListingRepository();
+        long now = System.currentTimeMillis();
+        assertThrows(NoClassDefFoundError.class, () -> db.inTransaction(c -> {
+            listings.insert(c, listing(now, now + 60_000));
+            throw new NoClassDefFoundError("simulated missing runtime class");
+        }));
+        assertEquals(0L, db.query(c -> {
+            try (Statement st = c.createStatement();
+                 ResultSet rs = st.executeQuery("SELECT COUNT(*) FROM auction_listings")) {
+                return rs.next() ? rs.getLong(1) : -1L;
+            }
+        }).longValue());
+    }
+
+    @Test
     void categoryFilterUsesIndexedMarketClassificationInsteadOfNameGuessing() {
         MarketCategoryRepository categories = new MarketCategoryRepository();
         MarketReadRepository markets = new MarketReadRepository();

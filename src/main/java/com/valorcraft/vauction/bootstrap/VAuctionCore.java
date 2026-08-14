@@ -138,6 +138,7 @@ public final class VAuctionCore {
             // 6а. автоматическое восстановление после краха (идемпотентно)
             RecoveryService.ScanReport recovery = core.recoveryService.startupScan();
             int simpleQuarantined = core.simpleAuctionService.quarantinePendingCreations(128);
+            int cancelledReturnsRecovered = core.simpleAuctionService.recoverCancelledReturns(128);
             int simpleRecovered = core.simpleAuctionService.recoverReserved(128);
             int retiredOrders = retirePlayerOrderBook(core.database, core.orders, core.auctionService);
             if (recovery.total() > 0) {
@@ -147,6 +148,9 @@ public final class VAuctionCore {
             }
             if (simpleRecovered > 0) {
                 LOGGER.info("VAuction simple listings recovered: {}", simpleRecovered);
+            }
+            if (cancelledReturnsRecovered > 0) {
+                LOGGER.warn("VAuction restored orphaned cancelled-listing returns: {}", cancelledReturnsRecovered);
             }
             if (simpleQuarantined > 0) {
                 LOGGER.warn("VAuction simple listings require manual review: {}", simpleQuarantined);

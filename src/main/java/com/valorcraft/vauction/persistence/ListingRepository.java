@@ -172,6 +172,26 @@ public final class ListingRepository {
         }
     }
 
+    /** Closed cancellations that lost their return delivery during an old non-Exception crash. */
+    public List<AuctionListing> simpleCancelledWithoutReturn(Connection c, int limit) {
+        String sql = "SELECT " + prefixColumns("l.") + " FROM auction_listings l "
+                + "JOIN auction_simple_listing_ids s ON s.listing_id=l.listing_id "
+                + "WHERE l.status='CANCELLED' AND s.state='CLOSED' "
+                + "AND NOT EXISTS (SELECT 1 FROM auction_deliveries d "
+                + "WHERE d.dedupe_key=('simple:return:' || l.listing_id)) "
+                + "ORDER BY l.updated_at,l.listing_id LIMIT ?";
+        try (PreparedStatement ps = c.prepareStatement(sql)) {
+            ps.setInt(1, Math.max(1, limit));
+            try (ResultSet rs = ps.executeQuery()) {
+                List<AuctionListing> out = new ArrayList<>();
+                while (rs.next()) out.add(map(rs));
+                return out;
+            }
+        } catch (SQLException e) {
+            throw new DatabaseException("orphaned simple cancellations query failed", e);
+        }
+    }
+
     /** Активные лоты продавца (для лимита активных лотов на игрока). */
     public List<AuctionListing> activeFor(Connection c, UUID sellerUuid) {
         String sql = "SELECT " + COLUMNS + " FROM auction_listings WHERE seller_uuid = ? AND status IN ('ACTIVE','RESERVED') "

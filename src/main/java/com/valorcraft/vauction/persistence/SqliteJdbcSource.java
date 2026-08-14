@@ -80,12 +80,11 @@ public final class SqliteJdbcSource implements JdbcSource {
             T result = work.execute(conn);
             conn.commit();
             return result;
-        } catch (DatabaseException e) {
+        } catch (Throwable failure) {
             rollbackQuietly(conn);
-            throw e;
-        } catch (Exception e) {
-            rollbackQuietly(conn);
-            throw new DatabaseException("transaction failed", e);
+            if (failure instanceof DatabaseException databaseFailure) throw databaseFailure;
+            if (failure instanceof Error error) throw error;
+            throw new DatabaseException("transaction failed", failure);
         } finally {
             try {
                 conn.setAutoCommit(previousAutoCommit);

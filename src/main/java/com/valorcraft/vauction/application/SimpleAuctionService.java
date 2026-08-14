@@ -322,6 +322,30 @@ public final class SimpleAuctionService {
         return expired;
     }
 
+    /** Repairs cancellations committed by builds that did not roll back JVM linkage errors. */
+    public int recoverCancelledReturns(int limit) {
+        int recovered = 0;
+        for (AuctionListing listing : database.query(c -> listings.simpleCancelledWithoutReturn(c, limit))) {
+            long now = System.currentTimeMillis();
+            try {
+                boolean inserted = database.inTransaction(c -> {
+                    AuctionListing current = listings.findById(c, listing.listingId()).orElse(null);
+                    String dedupe = "simple:return:" + listing.listingId();
+                    if (current == null || current.status() != ListingStatus.CANCELLED
+                            || deliveries.findByDedupeKey(c, dedupe).isPresent()) return false;
+                    String opId = "simple-cancel-" + current.listingId();
+                    deliveries.insert(c, claimable(current.sellerUuid(), current.listingId(), opId,
+                            DeliveryType.CANCELLED_RETURN, current.item(), dedupe, now));
+                    return true;
+                });
+                if (inserted) recovered++;
+            } catch (RuntimeException e) {
+                LOGGER.error("Could not recover return for cancelled simple listing {}", listing.listingId(), e);
+            }
+        }
+        return recovered;
+    }
+
     private Outcome settleAndFinalize(AuctionListing listing) {
         long calculatedCommission = commission(listing.priceMinor(), listing.commissionBps());
         long calculatedSellerNet = listing.priceMinor() - calculatedCommission;
