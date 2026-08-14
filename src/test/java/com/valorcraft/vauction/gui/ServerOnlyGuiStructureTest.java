@@ -71,8 +71,8 @@ class ServerOnlyGuiStructureTest {
     @Test
     void catalogueAlwaysRendersBothPageArrows() throws Exception {
         String controller = source("com/valorcraft/vauction/gui/MarketController.java");
-        assertTrue(controller.contains("put(box, s, previous, arrow(false, page.hasPrevious())"));
-        assertTrue(controller.contains("put(box, s, next, arrow(true, page.hasNext())"));
+        assertTrue(controller.contains("put(box, s, previous, arrow(s, false, page.hasPrevious())"));
+        assertTrue(controller.contains("put(box, s, next, arrow(s, true, page.hasNext())"));
         assertTrue(controller.contains("Других страниц нет"));
     }
 

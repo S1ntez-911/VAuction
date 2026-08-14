@@ -6,7 +6,6 @@ import com.valorcraft.vauction.application.SimpleAuctionService;
 import com.valorcraft.vauction.bootstrap.VAuctionCore;
 import com.valorcraft.vauction.domain.delivery.AuctionDelivery;
 import com.valorcraft.vauction.domain.listing.AuctionListing;
-import com.valorcraft.vauction.domain.order.OrderSide;
 import com.valorcraft.vauction.item.ItemCodecException;
 import net.minecraft.ChatFormatting;
 import net.minecraft.network.chat.Component;
@@ -46,7 +45,6 @@ public final class MarketController {
         s.screen = MarketScreen.BROWSE;
         s.cataloguePage = 0;
         s.search = "";
-        s.searchActive = false;
         s.mineOnly = false;
         s.filter = MarketFilter.ALL;
         renderCatalogue(player, s);
@@ -57,16 +55,11 @@ public final class MarketController {
         MarketSession s = sessions.computeIfAbsent(player.getUUID(), MarketSession::new);
         s.screen = MarketScreen.BROWSE;
         s.search = query == null ? "" : query.trim();
-        s.searchActive = !s.search.isBlank();
         s.cataloguePage = Math.max(0, page);
         renderCatalogue(player, s);
     }
 
-    /** Kept as a compatibility entry point: it toggles the same catalogue, not another screen. */
-    public void openOrders(ServerPlayer player) { showMine(player); }
-    public void openDeliveries(ServerPlayer player) { showMine(player); }
-
-    private void showMine(ServerPlayer player) {
+    public void showMine(ServerPlayer player) {
         if (!ready(player)) return;
         MarketSession s = sessions.computeIfAbsent(player.getUUID(), MarketSession::new);
         s.screen = MarketScreen.BROWSE;
@@ -94,19 +87,17 @@ public final class MarketController {
         switch (action.type()) {
             case REFRESH -> renderCatalogue(player, s);
             case PAGE -> { s.cataloguePage = Math.max(0, s.cataloguePage + action.number()); renderCatalogue(player, s); }
-            case TOGGLE_MINE, MY -> { s.mineOnly = !s.mineOnly; s.cataloguePage = 0; renderCatalogue(player, s); }
-            case NEXT_CATEGORY, OPEN_FILTERS -> {
+            case TOGGLE_MINE -> { s.mineOnly = !s.mineOnly; s.cataloguePage = 0; renderCatalogue(player, s); }
+            case NEXT_CATEGORY -> {
                 MarketFilter[] filters = MarketFilter.values();
                 s.filter = filters[(s.filter.ordinal() + 1) % filters.length];
                 s.cataloguePage = 0;
                 renderCatalogue(player, s);
             }
-            case OPEN_LISTING -> openListing(player, s, action.deliveryId());
-            case CONFIRM_PURCHASE -> purchase(player, s, action.deliveryId());
-            case CANCEL_LISTING -> cancel(player, s, action.deliveryId());
+            case OPEN_LISTING -> openListing(player, s, action.listingId());
+            case CONFIRM_PURCHASE -> purchase(player, s, action.listingId());
             case CLAIM_ALL -> { claimAll(player); renderCatalogue(player, s); }
-            case BACK, HOME, BROWSE -> { s.screen = MarketScreen.BROWSE; renderCatalogue(player, s); }
-            default -> renderCatalogue(player, s);
+            case BACK -> { s.screen = MarketScreen.BROWSE; renderCatalogue(player, s); }
         }
     }
 
@@ -122,7 +113,6 @@ public final class MarketController {
             return;
         }
         s.screen = MarketScreen.CONFIRM_PURCHASE;
-        s.selectedListingId = listingId;
         s.resetActions();
         SimpleContainer box = new SimpleContainer(54);
         ItemStack exact = decode(listing);
@@ -187,8 +177,7 @@ public final class MarketController {
         if (page.items().isEmpty()) {
             int empty = UiConfig.slot("catalogue", "empty");
             String name = s.mineOnly ? "У вас нет активных лотов" : "Подходящих лотов нет";
-            put(box, s, empty, GuiItems.namedButton(new ItemStack(Items.PAPER), name,
-                    ChatFormatting.GRAY, "Выставить стек: /ah sell <цена>"), null);
+            put(box, s, empty, configuredButton(s, "empty", name, null), null);
         }
         navigation(player, box, s, page);
         UiConfig.decorate("catalogue", box, s.placeholders);
@@ -198,9 +187,9 @@ public final class MarketController {
     private void navigation(ServerPlayer player, SimpleContainer box, MarketSession s, Page<?> page) {
         int previous = UiConfig.slot("catalogue", "previous");
         int next = UiConfig.slot("catalogue", "next");
-        put(box, s, previous, arrow(false, page.hasPrevious()),
+        put(box, s, previous, arrow(s, false, page.hasPrevious()),
                 page.hasPrevious() ? GuiAction.number(GuiAction.Type.PAGE, -1) : null);
-        put(box, s, next, arrow(true, page.hasNext()),
+        put(box, s, next, arrow(s, true, page.hasNext()),
                 page.hasNext() ? GuiAction.number(GuiAction.Type.PAGE, 1) : null);
 
         String category = UiConfig.text(s.filter.textKey);
@@ -217,13 +206,13 @@ public final class MarketController {
         int claimSlot = firstFreeControl(s, box, "help", "search", "info");
         List<AuctionDelivery> claims = VAuctionCore.instance().auctionReadService()
                 .deliveries(player.getUUID(), 0).items();
+        s.placeholders.put("claims", Integer.toString(claims.size()));
         if (!claims.isEmpty() && claimSlot >= 0) {
-            put(box, s, claimSlot, GuiItems.namedButton(new ItemStack(Items.CHEST),
-                    "Забрать предметы (" + claims.size() + ")", ChatFormatting.GREEN,
-                    "Покупки и снятые лоты"), GuiAction.simple(GuiAction.Type.CLAIM_ALL));
+            put(box, s, claimSlot, configuredButton(s, "claim",
+                    "Забрать предметы (" + claims.size() + ")", null), GuiAction.simple(GuiAction.Type.CLAIM_ALL));
         } else if (claimSlot >= 0) {
-            put(box, s, claimSlot, GuiItems.namedButton(new ItemStack(Items.PAPER),
-                    "Страница " + (page.page() + 1) + " / " + page.totalPages(), ChatFormatting.GRAY,
+            put(box, s, claimSlot, configuredButton(s, "info",
+                    "Страница " + (page.page() + 1) + " / " + page.totalPages(),
                     s.mineOnly ? "Показаны только ваши лоты" : "ЛКМ по товару: купить"), null);
         }
     }
@@ -279,23 +268,22 @@ public final class MarketController {
         catch (ItemCodecException e) { return new ItemStack(Items.BARRIER); }
     }
 
-    private static ItemStack arrow(boolean forward, boolean enabled) {
-        return GuiItems.namedButton(new ItemStack(Items.ARROW),
-                forward ? "Следующая страница" : "Предыдущая страница",
-                enabled ? ChatFormatting.AQUA : ChatFormatting.DARK_GRAY,
+    private static ItemStack arrow(MarketSession s, boolean forward, boolean enabled) {
+        String key = forward ? "next" : "previous";
+        return configuredButton(s, key, null,
                 enabled ? "Нажмите для перехода" : "Других страниц нет");
     }
 
     private static ItemStack configuredButton(MarketSession s, String key, String name, String lore) {
         UiConfig.ButtonCfg cfg = UiConfig.button(key);
-        String resolvedName = name != null ? name : cfg.name() != null ? cfg.name()
-                : cfg.nameKey() != null ? UiConfig.text(cfg.nameKey()) : key;
-        String resolvedLore = lore != null ? lore : cfg.loreKey() == null ? null : UiConfig.text(cfg.loreKey());
+        String resolvedName = UiConfig.format(name != null ? name : cfg.name(), s.placeholders);
+        List<String> resolvedLore = lore != null ? List.of(lore) : cfg.lore();
+        List<Component> components = resolvedLore.stream().filter(line -> line != null && !line.isBlank())
+                .map(line -> (Component) Component.literal(UiConfig.format(line, s.placeholders)).withStyle(style ->
+                        style.withColor(MarketPalette.byKey(cfg.loreColorKey())))).toList();
         return GuiItems.namedButton(new ItemStack(cfg.iconItem()),
                 Component.literal(resolvedName).withStyle(style -> style.withColor(MarketPalette.byKey(cfg.colorKey()))),
-                resolvedLore == null || resolvedLore.isBlank() ? List.of()
-                        : List.of(Component.literal(resolvedLore).withStyle(style ->
-                        style.withColor(MarketPalette.byKey(cfg.loreColorKey())))));
+                components);
     }
 
     private static int firstFreeControl(MarketSession s, SimpleContainer box, String... keys) {
@@ -373,10 +361,5 @@ public final class MarketController {
             if (player.containerMenu instanceof ServerChestMenu) player.closeContainer();
         }
         clear();
-    }
-
-    /** Retained for binary/source compatibility with older tests and integrations. */
-    static boolean shouldWarnPrice(OrderSide side, long price, com.valorcraft.vauction.domain.market.MarketSummary summary) {
-        return false;
     }
 }

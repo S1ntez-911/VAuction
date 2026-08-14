@@ -19,7 +19,7 @@ import net.minecraftforge.event.RegisterCommandsEvent;
 import java.math.BigDecimal;
 import java.util.concurrent.CompletableFuture;
 
-/** Minimal player command surface for the fixed-price auction. */
+/** Small, server-neutral command surface for the fixed-price auction. */
 final class MarketCommands {
     private MarketCommands() {}
 
@@ -36,21 +36,16 @@ final class MarketCommands {
                         .executes(ctx -> sellHelp(ctx.getSource()))
                         .then(Commands.argument("price", StringArgumentType.word())
                                 .suggests(MarketCommands::suggestPrices)
-                                .executes(ctx -> sell(ctx.getSource(),
-                                        StringArgumentType.getString(ctx, "price")))))
+                                .executes(ctx -> sell(ctx.getSource(), StringArgumentType.getString(ctx, "price")))))
                 .then(Commands.literal("search")
                         .executes(ctx -> fail(ctx.getSource(), "Использование: /ah search <название>"))
                         .then(Commands.argument("text", StringArgumentType.greedyString())
-                                .executes(ctx -> search(ctx.getSource(),
-                                        StringArgumentType.getString(ctx, "text")))))
+                                .executes(ctx -> search(ctx.getSource(), StringArgumentType.getString(ctx, "text")))))
                 .then(Commands.literal("mine").executes(ctx -> mine(ctx.getSource())))
-                .then(Commands.literal("claims").executes(ctx -> mine(ctx.getSource())))
                 .then(Commands.literal("help").executes(ctx -> help(ctx.getSource())))
-                .then(Commands.literal("ui").requires(source -> source.hasPermission(2))
-                        .then(Commands.literal("reload").executes(ctx -> uiReload(ctx.getSource()))))
+                .then(Commands.literal("reload").requires(source -> source.hasPermission(2))
+                        .executes(ctx -> reload(ctx.getSource())))
                 .then(Commands.literal("admin").requires(source -> source.hasPermission(2))
-                        .then(Commands.literal("reloadui").executes(ctx -> uiReload(ctx.getSource())))
-                        .then(Commands.literal("reloadcategories").executes(ctx -> categoryReload(ctx.getSource())))
                         .then(Commands.literal("category").executes(ctx -> categoryInfo(ctx.getSource())))
                         .then(Commands.literal("recover").executes(ctx -> recover(ctx.getSource()))))
                 .then(Commands.argument("unknown", StringArgumentType.greedyString())
@@ -74,7 +69,7 @@ final class MarketCommands {
     private static int mine(CommandSourceStack source) {
         ServerPlayer player = player(source);
         if (player == null || !ready(source)) return 0;
-        MarketController.instance().openOrders(player);
+        MarketController.instance().showMine(player);
         return 1;
     }
 
@@ -97,12 +92,12 @@ final class MarketCommands {
     }
 
     private static int help(CommandSourceStack source) {
-        source.sendSuccess(() -> Component.literal("Аукцион ValorCraft").withStyle(ChatFormatting.GOLD), false);
-        source.sendSuccess(() -> Component.literal("/ah — открыть все лоты").withStyle(ChatFormatting.GRAY), false);
-        source.sendSuccess(() -> Component.literal("/ah sell <цена> — продать весь стек в руке")
+        source.sendSuccess(() -> Component.literal("Аукцион").withStyle(ChatFormatting.GOLD), false);
+        source.sendSuccess(() -> Component.literal("/ah — открыть аукцион").withStyle(ChatFormatting.GRAY), false);
+        source.sendSuccess(() -> Component.literal("/ah sell <цена> — выставить весь стек из основной руки")
                 .withStyle(ChatFormatting.GRAY), false);
-        source.sendSuccess(() -> Component.literal("/ah mine — показать только свои лоты")
-                .withStyle(ChatFormatting.GRAY), false);
+        source.sendSuccess(() -> Component.literal("/ah search <название> — найти товар").withStyle(ChatFormatting.GRAY), false);
+        source.sendSuccess(() -> Component.literal("/ah mine — показать только свои лоты").withStyle(ChatFormatting.GRAY), false);
         source.sendSuccess(() -> Component.literal("Покупка: нажмите на товар и подтвердите.")
                 .withStyle(ChatFormatting.GRAY), false);
         return 1;
@@ -111,25 +106,19 @@ final class MarketCommands {
     private static int sellHelp(CommandSourceStack source) {
         source.sendSuccess(() -> Component.literal("Использование: /ah sell <цена>")
                 .withStyle(ChatFormatting.YELLOW), false);
-        source.sendSuccess(() -> Component.literal("Команда выставляет весь стек из основной руки. Цена указывается за весь лот.")
+        source.sendSuccess(() -> Component.literal("Весь стек из основной руки станет одним лотом. Цена указывается за весь лот.")
                 .withStyle(ChatFormatting.GRAY), false);
         return 1;
     }
 
-    private static int uiReload(CommandSourceStack source) {
-        String error = UiConfig.reload();
-        if (error != null) return fail(source, "Не удалось применить интерфейс: " + error);
+    private static int reload(CommandSourceStack source) {
+        String uiError = UiConfig.reload();
+        if (uiError != null) return fail(source, "Не удалось применить интерфейс: " + uiError);
+        String categoryError = VAuctionCore.instance().reloadMarketCategories();
+        if (categoryError != null) return fail(source, "Интерфейс применён, но категории не загружены: " + categoryError);
         MarketController.instance().closeAll(source.getServer());
-        source.sendSuccess(() -> Component.literal("Интерфейс аукциона обновлён.")
+        source.sendSuccess(() -> Component.literal("Настройки аукциона обновлены.")
                 .withStyle(ChatFormatting.GREEN), false);
-        return 1;
-    }
-
-    private static int categoryReload(CommandSourceStack source) {
-        String error = VAuctionCore.instance().reloadMarketCategories();
-        if (error != null) return fail(source, error);
-        MarketController.instance().closeAll(source.getServer());
-        source.sendSuccess(() -> Component.literal("Категории обновлены.").withStyle(ChatFormatting.GREEN), false);
         return 1;
     }
 
@@ -147,9 +136,9 @@ final class MarketCommands {
     private static int recover(CommandSourceStack source) {
         try {
             int simple = VAuctionCore.instance().simpleAuctionService().recoverReserved(128);
-            var old = VAuctionCore.instance().runRecoverySlice();
+            var legacy = VAuctionCore.instance().runRecoverySlice();
             source.sendSuccess(() -> Component.literal("Восстановление завершено: новых покупок " + simple
-                    + ", старых операций " + old.operationsAttempted() + ".").withStyle(ChatFormatting.GREEN), false);
+                    + ", старых операций " + legacy.operationsAttempted() + ".").withStyle(ChatFormatting.GREEN), false);
             return 1;
         } catch (RuntimeException e) {
             return fail(source, "Не удалось выполнить восстановление: " + e.getMessage());
@@ -158,7 +147,9 @@ final class MarketCommands {
 
     private static CompletableFuture<Suggestions> suggestPrices(CommandContext<CommandSourceStack> ctx,
                                                                 SuggestionsBuilder builder) {
-        suggest(builder, minor(1)); suggest(builder, minor(10)); suggest(builder, minor(100));
+        suggest(builder, minor(1));
+        suggest(builder, minor(10));
+        suggest(builder, minor(100));
         return builder.buildFuture();
     }
 

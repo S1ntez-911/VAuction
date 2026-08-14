@@ -2,9 +2,7 @@ package com.valorcraft.vauction.bootstrap;
 
 import com.valorcraft.vauction.application.AuctionService;
 import com.valorcraft.vauction.application.AuctionReadService;
-import com.valorcraft.vauction.application.DeliveryService;
 import com.valorcraft.vauction.application.InventoryOps;
-import com.valorcraft.vauction.application.ListingService;
 import com.valorcraft.vauction.application.ServerInventoryOps;
 import com.valorcraft.vauction.application.SimpleAuctionService;
 import com.valorcraft.vauction.application.MarketNotificationService;
@@ -18,7 +16,6 @@ import com.valorcraft.vauction.item.MarketCategoryConfig;
 import com.valorcraft.vauction.item.MarketCategoryClassifier;
 import com.valorcraft.vauction.persistence.MarketCategoryRepository;
 import com.valorcraft.vauction.persistence.AuctionHealthRepository;
-import com.valorcraft.vauction.persistence.BuyOrderRepository;
 import com.valorcraft.vauction.persistence.DatabaseManager;
 import com.valorcraft.vauction.persistence.DeliveryRepository;
 import com.valorcraft.vauction.persistence.ListingRepository;
@@ -60,15 +57,12 @@ public final class VAuctionCore {
     private EconomyGateway economyGateway;
     private ItemStackCodec codec;
     private ListingRepository listings;
-    private BuyOrderRepository buyOrders;
     private DeliveryRepository deliveries;
     private SaleRepository sales;
     private OperationRepository operations;
     private OrderRepository orders;
     private TradeRepository trades;
     private InventoryOps inventoryOps;
-    private ListingService listingService;
-    private DeliveryService deliveryService;
     private AuctionService auctionService;
     private AuctionReadService auctionReadService;
     private RecoveryService recoveryService;
@@ -116,15 +110,12 @@ public final class VAuctionCore {
 
             // 6. репозитории и сервисы
             core.listings = new ListingRepository();
-            core.buyOrders = new BuyOrderRepository();
             core.deliveries = new DeliveryRepository();
             core.sales = new SaleRepository();
             core.operations = new OperationRepository();
             core.orders = new OrderRepository();
             core.trades = new TradeRepository();
             core.inventoryOps = new ServerInventoryOps(() -> server);
-            core.listingService = new ListingService(core.database, core.listings, core.operations, core.codec);
-            core.deliveryService = new DeliveryService(core.database, core.deliveries);
             core.simpleAuctionService = new SimpleAuctionService(core.database, core.listings,
                     core.sales, core.deliveries, core.operations, core.codec,
                     core.economyGateway, core.inventoryOps, core.settings);
@@ -231,10 +222,6 @@ public final class VAuctionCore {
         return listings;
     }
 
-    public BuyOrderRepository buyOrders() {
-        return buyOrders;
-    }
-
     public DeliveryRepository deliveries() {
         return deliveries;
     }
@@ -245,10 +232,6 @@ public final class VAuctionCore {
 
     public OperationRepository operations() {
         return operations;
-    }
-
-    public ListingService listingService() {
-        return listingService;
     }
 
     public AuctionService auctionService() {
@@ -334,10 +317,6 @@ public final class VAuctionCore {
 
     public AuctionReadService auctionReadService() {
         return auctionReadService;
-    }
-
-    public DeliveryService deliveryService() {
-        return deliveryService;
     }
 
     public RecoveryService recoveryService() {

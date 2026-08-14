@@ -30,15 +30,9 @@ public final class AuctionConfig {
         final ForgeConfigSpec.BooleanValue enabled;
         final ForgeConfigSpec.IntValue listingDurationHours;
         final ForgeConfigSpec.IntValue maxSellOrdersPerPlayer;
-        final ForgeConfigSpec.IntValue maxBuyOrdersPerPlayer;
         final ForgeConfigSpec.LongValue listingFeeMinor;
         final ForgeConfigSpec.DoubleValue commissionPercent;
-        final ForgeConfigSpec.IntValue expiredRetentionDays;
-        final ForgeConfigSpec.IntValue historyRetentionDays;
-        final ForgeConfigSpec.IntValue catalogueHistoryDays;
         final ForgeConfigSpec.BooleanValue allowSelfPurchase;
-        final ForgeConfigSpec.IntValue sellOrderExpiryDays;
-        final ForgeConfigSpec.IntValue buyOrderExpiryDays;
         final ForgeConfigSpec.IntValue maxCompressedItemBytes;
         final ForgeConfigSpec.IntValue maxUncompressedItemBytes;
         final ForgeConfigSpec.BooleanValue allowContainersWithContents;
@@ -61,31 +55,12 @@ public final class AuctionConfig {
             maxSellOrdersPerPlayer = b
                     .comment("Максимум активных лотов на продажу у одного игрока.")
                     .defineInRange("max_sell_orders_per_player", 10, 1, 100);
-            maxBuyOrdersPerPlayer = b
-                    .comment("Максимум активных заявок на покупку у одного игрока.")
-                    .defineInRange("max_buy_orders_per_player", 10, 1, 100);
             listingFeeMinor = b
                     .comment("Плата за выставление лота в минимальных единицах валюты (0 = бесплатно).")
                     .defineInRange("listing_fee_minor", 0L, 0L, Long.MAX_VALUE);
             commissionPercent = b
                     .comment("Комиссия сервера в процентах (0.0 - 100.0), удерживается с продавца.")
                     .defineInRange("commission_percent", 2.5d, 0.0d, 100.0d);
-            sellOrderExpiryDays = b
-                    .comment("Макс. срок существования лота в днях, после которого возврат продавцу.")
-                    .defineInRange("sell_order_expiry_days", 7, 0, 365);
-            buyOrderExpiryDays = b
-                    .comment("Макс. срок существования заявки на покупку в днях (0 = бессрочно).")
-                    .defineInRange("buy_order_expiry_days", 3, 0, 365);
-            expiredRetentionDays = b
-                    .comment("Сколько дней хранить записи исполненных/отменённых лотов (история).")
-                    .defineInRange("expired_retention_days", 30, 1, 3650);
-            historyRetentionDays = b
-                    .comment("Сколько дней хранить журнал транзакций.")
-                    .defineInRange("history_retention_days", 90, 1, 3650);
-            catalogueHistoryDays = b
-                    .comment("Сколько дней показывать в каталоге товар без активных заявок после последней сделки.",
-                            "0 = сразу убрать товар, когда исчезли все заявки.")
-                    .defineInRange("catalogue_history_days", 30, 0, 3650);
             allowSelfPurchase = b
                     .comment("Разрешить игроку покупать собственный лот.")
                     .define("allow_self_purchase", false);
@@ -163,20 +138,20 @@ public final class AuctionConfig {
                 v.enabled.get(),
                 v.listingDurationHours.get(),
                 v.maxSellOrdersPerPlayer.get(),
-                v.maxBuyOrdersPerPlayer.get(),
+                10, // legacy order-book migration only
                 v.listingFeeMinor.get(),
                 commissionBps(),
-                v.expiredRetentionDays.get(),
-                v.historyRetentionDays.get(),
-                v.catalogueHistoryDays.get(),
+                30, // legacy retention, not player-facing
+                90, // legacy retention, not player-facing
+                0,  // old catalogue is retired
                 v.allowSelfPurchase.get(),
                 v.allowContainersWithContents.get(),
                 v.blockCustomNbt.get(),
                 v.allowEnchantedBooks.get(),
                 v.maxCompressedItemBytes.get(),
                 v.maxUncompressedItemBytes.get(),
-                v.sellOrderExpiryDays.get(),
-                v.buyOrderExpiryDays.get(),
+                7,  // legacy order retirement only
+                3,  // legacy order retirement only
                 v.itemPolicyMode.get(),
                 listOf(v.blacklistItems.get()),
                 listOf(v.blacklistTags.get()),
@@ -190,18 +165,6 @@ public final class AuctionConfig {
 
     public static int maxSellOrdersPerPlayer() {
         return VALUES.maxSellOrdersPerPlayer.get();
-    }
-
-    public static int maxBuyOrdersPerPlayer() {
-        return VALUES.maxBuyOrdersPerPlayer.get();
-    }
-
-    public static int sellOrderExpiryDays() {
-        return VALUES.sellOrderExpiryDays.get();
-    }
-
-    public static int buyOrderExpiryDays() {
-        return VALUES.buyOrderExpiryDays.get();
     }
 
     /** Комиссия в базисных пунктах (из процентного поля конфига). */

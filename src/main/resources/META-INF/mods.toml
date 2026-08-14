@@ -8,7 +8,7 @@ version="${version}"
 displayName="VAuction"
 authors="ValorCraft"
 displayTest="IGNORE_SERVER_VERSION"
-description='''VAuction — серверная биржа ресурсов для Forge 1.20.1. Игроки используют ванильное меню сундука через /market; установка VAuction или VEconomy на клиент не требуется. Заявки BUY/SELL, escrow VEconomy, безопасные доставки, SQLite и восстановление после сбоев выполняются только сервером.'''
+description='''Server-side fixed-price auction for Forge 1.20.1. Uses a vanilla chest GUI and VEconomy; clients do not need VAuction installed.'''
 
 [[dependencies.vauction]]
     modId="minecraft"

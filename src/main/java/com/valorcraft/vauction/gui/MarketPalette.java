@@ -5,7 +5,7 @@ import net.minecraft.network.chat.TextColor;
 import java.util.LinkedHashMap;
 import java.util.Map;
 
-/** ValorCraft web palette adapted to vanilla Minecraft text components. */
+/** Configurable palette adapted to vanilla Minecraft text components. */
 final class MarketPalette {
     /** Значения по умолчанию: используются как опора и для дефолтного конфига. */
     static final Map<String, String> DEFAULT_COLORS = Map.ofEntries(

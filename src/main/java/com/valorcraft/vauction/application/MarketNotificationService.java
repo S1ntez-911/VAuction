@@ -94,7 +94,7 @@ public final class MarketNotificationService {
             if (batch.hasPurchases()) {
                 player.sendSystemMessage(Component.literal("[Получить предметы]")
                         .withStyle(style -> style.withColor(ChatFormatting.AQUA)
-                                .withClickEvent(new ClickEvent(ClickEvent.Action.RUN_COMMAND, "/ah claims"))));
+                                .withClickEvent(new ClickEvent(ClickEvent.Action.RUN_COMMAND, "/ah"))));
             }
             player.playNotifySound(SoundEvents.EXPERIENCE_ORB_PICKUP, SoundSource.MASTER, 0.45f, 1.1f);
             long deliveryCursor = database.query(c -> deliveries.latestClaimableId(c, player.getUUID()));
@@ -133,8 +133,7 @@ public final class MarketNotificationService {
         player.sendSystemMessage(Component.literal(text.toString()).withStyle(ChatFormatting.GOLD));
         player.sendSystemMessage(Component.literal("[Открыть биржу]  [Получить предметы]")
                 .withStyle(style -> style.withColor(ChatFormatting.AQUA)
-                        .withClickEvent(new ClickEvent(ClickEvent.Action.RUN_COMMAND,
-                                claims.count() > 0 ? "/ah claims" : "/ah"))));
+                        .withClickEvent(new ClickEvent(ClickEvent.Action.RUN_COMMAND, "/ah"))));
         database.inTransaction(c -> {
             states.advance(c, playerId, summary.cursor().settledAt(), summary.cursor().tradeId(),
                     claims.latestId());
