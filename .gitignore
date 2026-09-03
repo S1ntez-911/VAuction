@@ -1,20 +1,16 @@
-# Локальная среда
 .gradle/
-
-# Сборка
 build/
+run/
 out/
+logs/
+crash-reports/
 *.class
+*.log
+*.log.gz
 
-# IDE
 .idea/
 *.iml
 .vscode/
 .settings/
 .classpath
 .project
-
-# Прочее
-logs/
-crash-reports/
-run/

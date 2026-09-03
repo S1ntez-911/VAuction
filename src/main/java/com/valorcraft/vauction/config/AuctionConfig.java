@@ -1,178 +1,156 @@
 package com.valorcraft.vauction.config;
 
 import net.minecraftforge.common.ForgeConfigSpec;
-import net.minecraftforge.fml.ModLoadingContext;
-import net.minecraftforge.fml.config.ModConfig;
-import net.minecraftforge.fml.loading.FMLPaths;
 
-import java.io.IOException;
-import java.util.Arrays;
 import java.util.List;
 
-/**
- * Серверный конфиг аукциона ({@code config/VMods/VAuction/vauction-server.toml}) на ForgeConfigSpec.
- * <p>
- * Снимок значений берётся через {@link #snapshot()} (immutable {@link AuctionSettings})
- * — он и передаётся в сервисы, в операции сохраняется в БД. Комиссия задаётся
- * в процентах (double) только в конфиге; в домене — всегда basis points (int).
- * <p>
- * Все поля читаются с серверного потока или других потоков на этапе конфифгурации —
- * ForgeConfigSpec сам хорошо потокобезопасен.
- */
 public final class AuctionConfig {
-
-    private static final ForgeConfigSpec SPEC;
-    private static final AuctionSpec VALUES;
-
-    private AuctionConfig() {}
-
-    private static final class AuctionSpec {
-        final ForgeConfigSpec.BooleanValue enabled;
-        final ForgeConfigSpec.IntValue listingDurationHours;
-        final ForgeConfigSpec.IntValue maxSellOrdersPerPlayer;
-        final ForgeConfigSpec.LongValue listingFeeMinor;
-        final ForgeConfigSpec.DoubleValue commissionPercent;
-        final ForgeConfigSpec.BooleanValue allowSelfPurchase;
-        final ForgeConfigSpec.IntValue maxCompressedItemBytes;
-        final ForgeConfigSpec.IntValue maxUncompressedItemBytes;
-        final ForgeConfigSpec.BooleanValue allowContainersWithContents;
-        final ForgeConfigSpec.BooleanValue blockCustomNbt;
-        final ForgeConfigSpec.BooleanValue allowEnchantedBooks;
-        final ForgeConfigSpec.ConfigValue<List<? extends String>> blacklistItems;
-        final ForgeConfigSpec.ConfigValue<List<? extends String>> blacklistTags;
-        final ForgeConfigSpec.ConfigValue<List<? extends String>> whitelistItems;
-        final ForgeConfigSpec.ConfigValue<List<? extends String>> whitelistTags;
-        final ForgeConfigSpec.EnumValue<ItemPolicyMode> itemPolicyMode;
-
-        private AuctionSpec(ForgeConfigSpec.Builder b) {
-            b.comment("VAuction — параметры аукциона (серверные)").push("general");
-
-            enabled = b.comment("Общий выключатель аукциона.")
-                    .define("enabled", true);
-            listingDurationHours = b
-                    .comment("Время жизни лота на продажу в часах (0 = бессрочно).")
-                    .defineInRange("listing_duration_hours", 48, 0, 24 * 365);
-            maxSellOrdersPerPlayer = b
-                    .comment("Максимум активных лотов на продажу у одного игрока.")
-                    .defineInRange("max_sell_orders_per_player", 10, 1, 100);
-            listingFeeMinor = b
-                    .comment("Плата за выставление лота в минимальных единицах валюты (0 = бесплатно).")
-                    .defineInRange("listing_fee_minor", 0L, 0L, Long.MAX_VALUE);
-            commissionPercent = b
-                    .comment("Комиссия сервера в процентах (0.0 - 100.0), удерживается с продавца.")
-                    .defineInRange("commission_percent", 2.5d, 0.0d, 100.0d);
-            allowSelfPurchase = b
-                    .comment("Разрешить игроку покупать собственный лот.")
-                    .define("allow_self_purchase", false);
-            b.pop();
-
-            b.comment("Предметы и NBT").push("items");
-            allowContainersWithContents = b
-                    .comment("Разрешать хранилища с предметами или жидкостями.",
-                            "Перед созданием лота VAuction проверяет точное восстановление содержимого.")
-                    .define("allow_containers_with_contents", true);
-            blockCustomNbt = b
-                    .comment("Запрещать предметы с нестандартным NBT (кроме повреждений).",
-                            "false = предметы с тегами торгуются: MarketKey разделяет стакан по полному NBT, контент не теряется.")
-                    .define("block_custom_nbt", false);
-            allowEnchantedBooks = b
-                    .comment("Разрешать книги зачарований даже при block_custom_nbt=true.")
-                    .define("allow_enchanted_books", true);
-            itemPolicyMode = b
-                    .comment("Режим политики предметов: BLACKLIST или WHITELIST.")
-                    .defineEnum("item_policy_mode", ItemPolicyMode.BLACKLIST);
-            blacklistItems = b
-                    .comment("Полные ID предметов, запрещённые к торговле.",
-                            "Пример: minecraft:written_book")
-                    .defineListAllowEmpty("blacklist_items",
-                            Arrays.asList("minecraft:written_book", "minecraft:enchanted_book"),
-                            s -> s instanceof String s2 && s2.matches("[a-z0-9_.]+:[a-z0-9_./-]+"));
-            blacklistTags = b
-                    .comment("Теги предметов, запрещённые к торговле (например minecraft:black_dyes).")
-                    .defineListAllowEmpty("blacklist_tags", List.of(),
-                            s -> s instanceof String s2 && s2.matches("[a-z0-9_.]+:[a-z0-9_./-]+"));
-            whitelistItems = b
-                    .comment("Полные ID предметов, разрешённые в режиме WHITELIST.")
-                    .defineListAllowEmpty("whitelist_items", List.of(),
-                            s -> s instanceof String s2 && s2.matches("[a-z0-9_.]+:[a-z0-9_./-]+"));
-            whitelistTags = b
-                    .comment("Теги предметов, разрешённые в режиме WHITELIST.")
-                    .defineListAllowEmpty("whitelist_tags", List.of(),
-                            s -> s instanceof String s2 && s2.matches("[a-z0-9_.]+:[a-z0-9_./-]+"));
-            maxCompressedItemBytes = b
-                    .comment("Максимум байт сжатого NBT предмета (защита от дупов размера).")
-                    .defineInRange("max_compressed_item_bytes", 262_144, 1024, 16_777_216);
-            maxUncompressedItemBytes = b
-                    .comment("Максимум байт несжатого NBT предмета.")
-                    .defineInRange("max_uncompressed_item_bytes", 2_097_152, 1024, 128_000_000);
-            b.pop();
-        }
-    }
+    public static final ForgeConfigSpec SPEC;
+    public static final ForgeConfigSpec.IntValue MAX_LISTINGS_PER_PLAYER;
+    public static final ForgeConfigSpec.IntValue LISTING_DURATION_HOURS;
+    public static final ForgeConfigSpec.IntValue HISTORY_RETENTION_DAYS;
+    public static final ForgeConfigSpec.LongValue MIN_PRICE;
+    public static final ForgeConfigSpec.LongValue MAX_PRICE;
+    public static final ForgeConfigSpec.ConfigValue<List<? extends String>> FORBIDDEN_ITEMS;
+    public static final ForgeConfigSpec.ConfigValue<List<? extends String>> CATEGORY_OVERRIDES;
+    public static final ForgeConfigSpec.ConfigValue<List<? extends String>> CATEGORY_DEFINITIONS;
+    public static final ForgeConfigSpec.ConfigValue<String> PREVIOUS_ITEM;
+    public static final ForgeConfigSpec.ConfigValue<String> NEXT_ITEM;
+    public static final ForgeConfigSpec.ConfigValue<String> INFO_ITEM;
+    public static final ForgeConfigSpec.ConfigValue<String> FILTER_ITEM;
+    public static final ForgeConfigSpec.ConfigValue<String> BACKGROUND_ITEM;
+    public static final ForgeConfigSpec.ConfigValue<String> MY_LISTINGS_ITEM;
+    public static final ForgeConfigSpec.ConfigValue<String> ARCHIVE_ITEM;
+    public static final ForgeConfigSpec.ConfigValue<String> REFRESH_ITEM;
+    public static final ForgeConfigSpec.ConfigValue<String> RESET_ITEM;
+    public static final ForgeConfigSpec.ConfigValue<String> SORT_ITEM;
+    public static final ForgeConfigSpec.ConfigValue<String> BACK_ITEM;
+    public static final ForgeConfigSpec.ConfigValue<String> CLAIM_ALL_ITEM;
+    public static final ForgeConfigSpec.ConfigValue<String> HISTORY_ITEM;
+    public static final ForgeConfigSpec.ConfigValue<String> SOLD_ITEM;
+    public static final ForgeConfigSpec.ConfigValue<String> NO_MONEY_ITEM;
+    public static final ForgeConfigSpec.ConfigValue<String> CONFIRM_YES_ITEM;
+    public static final ForgeConfigSpec.ConfigValue<String> CONFIRM_NO_ITEM;
+    public static final ForgeConfigSpec.ConfigValue<String> CONFIRM_BACKGROUND_ITEM;
+    public static final ForgeConfigSpec.ConfigValue<String> FLUID_PREVIEW_ITEM;
+    public static final ForgeConfigSpec.ConfigValue<String> SALE_NOTIFICATION;
+    public static final ForgeConfigSpec.BooleanValue SOUNDS_ENABLED;
+    public static final ForgeConfigSpec.ConfigValue<String> SALE_SOUND;
+    public static final ForgeConfigSpec.ConfigValue<String> PURCHASE_SOUND;
+    public static final ForgeConfigSpec.ConfigValue<String> ACTION_SOUND;
+    public static final ForgeConfigSpec.DoubleValue SOUND_VOLUME;
+    public static final ForgeConfigSpec.DoubleValue SOUND_PITCH;
+    public static final ForgeConfigSpec.IntValue QUERY_CACHE_ENTRIES;
+    public static final ForgeConfigSpec.IntValue EXPIRY_SCAN_INTERVAL_MS;
+    public static final ForgeConfigSpec.IntValue MENU_CLICK_COOLDOWN_MS;
+    public static final ForgeConfigSpec.IntValue DATABASE_BUSY_TIMEOUT_MS;
+    public static final ForgeConfigSpec.ConfigValue<String> THEME_PRIMARY;
+    public static final ForgeConfigSpec.ConfigValue<String> THEME_SECONDARY;
+    public static final ForgeConfigSpec.ConfigValue<String> THEME_SUCCESS;
+    public static final ForgeConfigSpec.ConfigValue<String> THEME_DANGER;
+    public static final ForgeConfigSpec.ConfigValue<String> THEME_MUTED;
+    public static final ForgeConfigSpec.ConfigValue<String> THEME_TEXT;
 
     static {
         ForgeConfigSpec.Builder builder = new ForgeConfigSpec.Builder();
-        VALUES = new AuctionSpec(builder);
+        builder.push("auction");
+        MAX_LISTINGS_PER_PLAYER = builder.comment("Максимум активных лотов одного игрока")
+                .defineInRange("maxListingsPerPlayer", 27, 1, 1000);
+        LISTING_DURATION_HOURS = builder.comment("Срок жизни лота в часах")
+                .defineInRange("listingDurationHours", 72, 1, 24 * 365);
+        HISTORY_RETENTION_DAYS = builder.comment("Сколько дней хранить завершённые лоты в SQLite; 0 удаляет сразу")
+                .defineInRange("historyRetentionDays", 14, 0, 3650);
+        MIN_PRICE = builder.comment("Минимальная цена в минимальных единицах VEconomy")
+                .defineInRange("minimumPriceMinor", 1L, 1L, Long.MAX_VALUE);
+        MAX_PRICE = builder.comment("Максимальная цена в минимальных единицах VEconomy")
+                .defineInRange("maximumPriceMinor", 1_000_000_000_000L, 1L, Long.MAX_VALUE);
+        FORBIDDEN_ITEMS = builder.comment("ID предметов, которые запрещено выставлять")
+                .defineList("forbiddenItems", List.of(), value -> value instanceof String);
+        CATEGORY_OVERRIDES = builder.comment(
+                        "Ручная категория: item_id=CATEGORY, #tag_id=CATEGORY или modid:*=CATEGORY",
+                        "Категории: TOOLS, WEAPONS, ARMOR, FOOD, UNIQUE, ENCHANTING, ALCHEMY, POTIONS, BLOCKS, DECORATIVE, MECHANISMS, GEMS, VEGETATION, MOB_DROPS, MISC")
+                .defineList("categoryOverrides", List.of(), value -> value instanceof String);
+        CATEGORY_DEFINITIONS = builder.comment("Названия и иконки категорий: CATEGORY=Название|item_id")
+                .defineList("categoryDefinitions", List.of(
+                        "ALL=Все товары|minecraft:chest", "TOOLS=Инструменты|minecraft:iron_pickaxe",
+                        "WEAPONS=Оружие|minecraft:iron_sword", "ARMOR=Броня|minecraft:iron_chestplate",
+                        "FOOD=Еда|minecraft:cooked_beef", "UNIQUE=Уникальные предметы|minecraft:nether_star",
+                        "ENCHANTING=Зачарование|minecraft:enchanted_book", "ALCHEMY=Алхимия|minecraft:brewing_stand",
+                        "POTIONS=Зелья|minecraft:potion", "BLOCKS=Блоки|minecraft:bricks",
+                        "DECORATIVE=Декоративные предметы|minecraft:painting", "MECHANISMS=Механизмы|minecraft:redstone",
+                        "GEMS=Драгоценности|minecraft:diamond", "VEGETATION=Растительность|minecraft:oak_sapling",
+                        "MOB_DROPS=Лут с мобов|minecraft:rotten_flesh", "MISC=Разное|minecraft:paper"),
+                        value -> value instanceof String);
+        builder.pop();
+
+        builder.comment("Все служебные предметы GUI. Разрешены ID предметов Minecraft и модпака; тексты и lore находятся в lang/ru_ru.json")
+                .push("interface");
+        PREVIOUS_ITEM = builder.comment("Иконки основной панели; ключи V2 сохранены для совместимости с конфигом VAuction 1.0.3")
+                .define("previousButtonItemV2", "minecraft:gray_dye");
+        NEXT_ITEM = builder.define("nextButtonItemV2", "minecraft:yellow_dye");
+        INFO_ITEM = builder.define("infoButtonItemV2", "minecraft:nether_star");
+        FILTER_ITEM = builder.define("filterButtonItemV2", "minecraft:chest_minecart");
+        BACKGROUND_ITEM = builder.comment("Заполнитель нижней панели меню")
+                .define("backgroundItem", "minecraft:gray_stained_glass_pane");
+        MY_LISTINGS_ITEM = builder.define("myListingsItem", "minecraft:chest");
+        ARCHIVE_ITEM = builder.define("archiveItem", "minecraft:barrel");
+        REFRESH_ITEM = builder.define("refreshItem", "minecraft:emerald");
+        RESET_ITEM = builder.define("resetFiltersItem", "minecraft:name_tag");
+        SORT_ITEM = builder.define("sortItem", "minecraft:hopper");
+        BACK_ITEM = builder.define("backItem", "minecraft:arrow");
+        CLAIM_ALL_ITEM = builder.define("claimAllItem", "minecraft:hopper");
+        HISTORY_ITEM = builder.define("historyItem", "minecraft:book");
+        SOLD_ITEM = builder.comment("Временная замена карточки, если лот уже куплен")
+                .define("soldItem", "minecraft:barrier");
+        NO_MONEY_ITEM = builder.comment("Временная замена карточки при недостатке средств")
+                .define("noMoneyItem", "minecraft:barrier");
+        CONFIRM_YES_ITEM = builder.define("confirmYesItem", "minecraft:lime_stained_glass_pane");
+        CONFIRM_NO_ITEM = builder.define("confirmNoItem", "minecraft:red_stained_glass_pane");
+        CONFIRM_BACKGROUND_ITEM = builder.define("confirmBackgroundItem", "minecraft:light_gray_stained_glass_pane");
+        FLUID_PREVIEW_ITEM = builder.comment("Иконка жидкости в просмотре содержимого контейнера")
+                .define("fluidPreviewItem", "minecraft:bucket");
+        builder.pop();
+
+        builder.push("messages");
+        SALE_NOTIFICATION = builder.define("offlineSaleNotification",
+                "Ваш товар {item} купили за {price}. Деньги уже зачислены.");
+        builder.pop();
+
+        builder.comment("Звуковые уведомления. Используются ID звуков Minecraft/модов")
+                .push("sounds");
+        SOUNDS_ENABLED = builder.define("enabled", true);
+        SALE_SOUND = builder.define("saleSound", "minecraft:entity.player.levelup");
+        PURCHASE_SOUND = builder.define("purchaseSound", "minecraft:entity.experience_orb.pickup");
+        ACTION_SOUND = builder.define("actionSound", "minecraft:ui.button.click");
+        SOUND_VOLUME = builder.defineInRange("volume", 0.8D, 0.0D, 4.0D);
+        SOUND_PITCH = builder.defineInRange("pitch", 1.0D, 0.1D, 2.0D);
+        builder.pop();
+
+        builder.comment("Оптимизация аукциона под одновременную работу большого числа игроков")
+                .push("performance");
+        QUERY_CACHE_ENTRIES = builder.comment("Максимум кешированных вариантов сортировки и фильтрации")
+                .defineInRange("queryCacheEntries", 512, 16, 8192);
+        EXPIRY_SCAN_INTERVAL_MS = builder.comment("Минимальный интервал между проверками истёкших лотов")
+                .defineInRange("expiryScanIntervalMs", 1000, 100, 60000);
+        MENU_CLICK_COOLDOWN_MS = builder.comment("Защита GUI от спама пакетами; 0 отключает")
+                .defineInRange("menuClickCooldownMs", 120, 0, 2000);
+        DATABASE_BUSY_TIMEOUT_MS = builder.comment("Максимальное ожидание блокировки SQLite на серверном потоке")
+                .defineInRange("databaseBusyTimeoutMs", 250, 0, 2000);
+        builder.pop();
+
+        builder.comment("Фирменная палитра ValorCraft. Формат: #RRGGBB; применяется ко всему интерфейсу и чату VAuction")
+                .push("theme");
+        THEME_PRIMARY = builder.comment("Основное фирменное золото ValorCraft")
+                .define("primary", "#D4A84A");
+        THEME_SECONDARY = builder.comment("Светлый золотой акцент ValorCraft")
+                .define("secondary", "#FFD35B");
+        THEME_SUCCESS = builder.define("success", "#75F09A");
+        THEME_DANGER = builder.define("danger", "#FF8278");
+        THEME_MUTED = builder.define("muted", "#889AAA");
+        THEME_TEXT = builder.define("text", "#E8E6DA");
+        builder.pop();
         SPEC = builder.build();
     }
 
-    /** Регистрация файла конфигурации (в конструкторе мода). */
-    public static void register() {
-        try {
-            VAuctionConfigPaths.file(FMLPaths.CONFIGDIR.get(), "vauction-server.toml");
-            VAuctionConfigPaths.migrateLegacyWorldFile(FMLPaths.CONFIGDIR.get(), FMLPaths.GAMEDIR.get(),
-                    "vauction-server.toml");
-        } catch (IOException e) {
-            throw new IllegalStateException("Cannot prepare config/VMods/VAuction", e);
-        }
-        // COMMON is intentional: Forge SERVER configs live inside each world's
-        // serverconfig directory, while ValorCraft keeps all mod configs together.
-        // The values are still consumed exclusively by the dedicated server.
-        ModLoadingContext.get().registerConfig(ModConfig.Type.COMMON, SPEC,
-                VAuctionConfigPaths.forgeFileName("vauction-server.toml"));
-    }
-
-    /** Актуальный снимок настроек (для сервисов и операций). */
-    public static AuctionSettings snapshot() {
-        AuctionSpec v = VALUES;
-        return new AuctionSettings(
-                v.enabled.get(),
-                v.listingDurationHours.get(),
-                v.maxSellOrdersPerPlayer.get(),
-                10, // legacy order-book migration only
-                v.listingFeeMinor.get(),
-                commissionBps(),
-                30, // legacy retention, not player-facing
-                90, // legacy retention, not player-facing
-                0,  // old catalogue is retired
-                v.allowSelfPurchase.get(),
-                v.allowContainersWithContents.get(),
-                v.blockCustomNbt.get(),
-                v.allowEnchantedBooks.get(),
-                v.maxCompressedItemBytes.get(),
-                v.maxUncompressedItemBytes.get(),
-                7,  // legacy order retirement only
-                3,  // legacy order retirement only
-                v.itemPolicyMode.get(),
-                listOf(v.blacklistItems.get()),
-                listOf(v.blacklistTags.get()),
-                listOf(v.whitelistItems.get()),
-                listOf(v.whitelistTags.get()));
-    }
-
-    public static boolean isEnabled() {
-        return VALUES.enabled.get();
-    }
-
-    public static int maxSellOrdersPerPlayer() {
-        return VALUES.maxSellOrdersPerPlayer.get();
-    }
-
-    /** Комиссия в базисных пунктах (из процентного поля конфига). */
-    public static int commissionBps() {
-        return (int) Math.round(Math.max(0.0d, Math.min(100.0d, VALUES.commissionPercent.get())) * 100.0d);
-    }
-
-    private static List<String> listOf(List<? extends String> src) {
-        return src == null ? List.of() : List.copyOf(src);
-    }
+    private AuctionConfig() {}
 }

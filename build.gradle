@@ -11,184 +11,62 @@ base {
 }
 
 java {
-    toolchain {
-        languageVersion = JavaLanguageVersion.of(17)
-    }
+    toolchain { languageVersion = JavaLanguageVersion.of(17) }
     withSourcesJar()
 }
 
 minecraft {
-    mappings channel: 'official', version: "${minecraft_version}"
-
+    mappings channel: 'official', version: minecraft_version
+    accessTransformer = file('src/main/resources/META-INF/accesstransformer.cfg')
     runs {
         client {
             workingDirectory project.file('run')
-            property 'forge.logging.console.level', 'debug'
-            mods {
-                vauction {
-                    source sourceSets.main
-                }
-            }
+            property 'forge.logging.console.level', 'info'
+            mods { vauction { source sourceSets.main } }
         }
         server {
             workingDirectory project.file('run')
-            property 'forge.logging.console.level', 'debug'
-            mods {
-                vauction {
-                    source sourceSets.main
-                }
-            }
+            property 'forge.logging.console.level', 'info'
+            mods { vauction { source sourceSets.main } }
         }
     }
 }
 
 repositories {
     mavenCentral()
-    // VEconomy собирается из соседнего проекта; jar кладётся в libs/ как
-    // veconomy-1.0.0.jar (compile-only, в финальный jar не попадает).
-    flatDir { dirs 'libs' }
+    flatDir { dirs providers.gradleProperty('veconomy_dir').orElse('../VEconomy/build/libs').get() }
 }
 
 dependencies {
     minecraft "net.minecraftforge:forge:${minecraft_version}-${forge_version}"
-
-    // VEconomy: полная сборка невозможна без локальных зависимостей (kubejs и пр.),
-    // поэтому на compile classpath ложится API-снимок HEAD (b3e41fa) + компиляционный
-    // stub EconomyCore — signalатуры совпадают с реальным economy_core.jar,
-    // который подставляется на сервере (mods/). В финальный jar не попадает.
-    compileOnly files('libs/veconomy-api-1.0.0.jar')
-    runtimeOnly files('libs/veconomy-api-1.0.0.jar')
-
-    // Собственная БД VAuction: SQLite (по умолчанию). Драйвер упаковывается jarJar'ом.
-    implementation('org.xerial:sqlite-jdbc:3.45.3.0') { transitive = false }
-    jarJar('org.xerial:sqlite-jdbc:3.45.3.0') {
-        jarJar.ranged(it, '[3.45.3.0,4.0.0)')
-    }
-
+    compileOnly fg.deobf(group: 'local', name: 'VEconomy-1.20.1', version: '1.0.0')
+    runtimeOnly fg.deobf(group: 'local', name: 'VEconomy-1.20.1', version: '1.0.0', classifier: 'all')
     testImplementation 'org.junit.jupiter:junit-jupiter-api:5.10.2'
     testRuntimeOnly 'org.junit.jupiter:junit-jupiter-engine:5.10.2'
-    testRuntimeOnly 'org.junit.platform:junit-platform-launcher:1.10.2'
+    testImplementation 'org.xerial:sqlite-jdbc:3.45.3.0'
 }
 
-test {
-    useJUnitPlatform()
-    testLogging {
-        events "passed", "failed", "skipped"
-    }
-}
+test { useJUnitPlatform() }
 
 processResources {
     inputs.property 'version', project.version
-    filesMatching('META-INF/mods.toml') {
-        expand version: project.version
-    }
+    filesMatching('META-INF/mods.toml') { expand version: project.version }
 }
 
-tasks.withType(JavaCompile).configureEach {
-    options.encoding = 'UTF-8'
-}
+tasks.withType(JavaCompile).configureEach { options.encoding = 'UTF-8' }
 
 jar {
-    archiveClassifier = 'slim'
     preserveFileTimestamps = false
     reproducibleFileOrder = true
     manifest {
         attributes([
-                'Specification-Title'   : 'VAuction',
-                'Specification-Version' : project.version,
-                'Specification-Vendor'  : 'ValorCraft',
-                'Implementation-Title'  : 'VAuction',
+                'Specification-Title': 'VAuction',
+                'Specification-Version': project.version,
+                'Specification-Vendor': 'ValorCraft',
+                'Implementation-Title': 'VAuction',
                 'Implementation-Version': project.jar.archiveVersion,
                 'Implementation-Vendor': 'ValorCraft'
         ])
     }
-}
-
-// ForgeGradle remaps Mojmap method names to the SRG names used by a production
-// dedicated server. Keep the dependency-free jar visibly separate and make the
-// jarJar artifact the single server-ready file produced by `build`.
-tasks.named('jar').configure {
     finalizedBy 'reobfJar'
-}
-
-tasks.named('jarJar').configure {
-    archiveClassifier = ''
-    preserveFileTimestamps = false
-    reproducibleFileOrder = true
-    finalizedBy 'reobfJarJar'
-}
-
-def java17Compiler = javaToolchains.compilerFor {
-    languageVersion = JavaLanguageVersion.of(17)
-}
-
-tasks.register('verifyProductionJar') {
-    group = 'verification'
-    description = 'Verifies that the server jar is reobfuscated and contains no game classes.'
-    dependsOn 'reobfJarJar'
-
-    doLast {
-        File productionJar = tasks.named('jarJar').get().archiveFile.get().asFile
-        if (!productionJar.isFile()) {
-            throw new GradleException("Production jar is missing: ${productionJar}")
-        }
-
-        def forbidden = zipTree(productionJar).matching {
-            include 'net/minecraft/**'
-            include 'net/minecraftforge/**'
-            include 'com/mojang/brigadier/**'
-        }.files
-        if (!forbidden.empty) {
-            throw new GradleException("Production jar embeds forbidden Minecraft/Forge/Brigadier classes: ${forbidden}")
-        }
-
-        // Refuse incomplete incremental artifacts: every compiled VAuction
-        // class must also be present in the server-ready jar.
-        Set<String> expectedClasses = [] as Set
-        sourceSets.main.output.classesDirs.files.findAll { it.isDirectory() }.each { classesDir ->
-            fileTree(classesDir).matching { include 'com/valorcraft/vauction/**/*.class' }.files.each { classFile ->
-                expectedClasses.add(classesDir.toPath().relativize(classFile.toPath())
-                        .toString().replace(File.separatorChar, '/' as char))
-            }
-        }
-        Set<String> packagedClasses = [] as Set
-        new java.util.zip.ZipFile(productionJar).withCloseable { zip ->
-            zip.entries().each { entry ->
-                if (!entry.directory && entry.name.startsWith('com/valorcraft/vauction/')
-                        && entry.name.endsWith('.class')) {
-                    packagedClasses.add(entry.name)
-                }
-            }
-        }
-        Set<String> missingClasses = expectedClasses - packagedClasses
-        if (!missingClasses.empty) {
-            throw new GradleException("Production jar is missing compiled VAuction classes: ${missingClasses.sort()}")
-        }
-        if (!packagedClasses.contains('com/valorcraft/vauction/domain/delivery/DeliveryType.class')) {
-            throw new GradleException('Production jar is missing critical DeliveryType.class')
-        }
-
-        File javac = java17Compiler.get().executablePath.asFile
-        File javap = new File(javac.parentFile,
-                System.getProperty('os.name').toLowerCase(Locale.ROOT).contains('windows') ? 'javap.exe' : 'javap')
-        def output = new ByteArrayOutputStream()
-        exec {
-            commandLine javap.absolutePath, '-classpath', productionJar.absolutePath,
-                    '-c', '-p', 'com.valorcraft.vauction.gui.MarketCommands'
-            standardOutput = output
-            errorOutput = output
-        }
-        String bytecode = output.toString('UTF-8')
-        if (bytecode.contains('net/minecraft/commands/Commands.literal:')
-                || bytecode.contains('net/minecraft/commands/Commands.argument:')) {
-            throw new GradleException('Production jar still contains Mojmap command calls; reobfuscation did not run.')
-        }
-        if (!bytecode.contains('net/minecraft/commands/Commands.m_82127_:')) {
-            throw new GradleException('Production jar does not contain the expected Forge 1.20.1 SRG command call.')
-        }
-    }
-}
-
-tasks.named('check').configure {
-    dependsOn tasks.named('verifyProductionJar')
 }
