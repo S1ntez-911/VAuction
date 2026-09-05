@@ -15,7 +15,7 @@ import net.minecraft.world.item.*;
 import java.util.List;
 
 /** TM2 shulker preview: 27 contents slots, navigation row, back at 29 and action at 31. */
-public final class ContainerPreviewMenu extends AbstractContainerMenu {
+public final class ContainerPreviewMenu extends AbstractContainerMenu implements ReloadableMenu {
     private final SimpleContainer display = new SimpleContainer(36);
     private final ServerPlayer viewer; private final AuctionListing listing; private final AuctionService service;
     private final Runnable back;
@@ -36,6 +36,8 @@ public final class ContainerPreviewMenu extends AbstractContainerMenu {
         p.openMenu(new SimpleMenuProvider((id, inv, ignored) -> new ContainerPreviewMenu(id, inv, listing, service, back),
                 AuctionLang.component("tm2.preview.title")));
     }
+
+    @Override public void refreshConfig() { rebuild(); broadcastChanges(); }
 
     private void rebuild() {
         display.clearContent(); List<ItemStack> contents = ContainerInspector.entries(listing.item());

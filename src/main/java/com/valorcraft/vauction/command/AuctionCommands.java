@@ -110,9 +110,21 @@ public final class AuctionCommands {
     }
 
     private static int reload(CommandContext<CommandSourceStack> context) {
+        try {
+            com.valorcraft.vauction.config.AuctionConfig.reload();
+        } catch (RuntimeException e) {
+            VAuctionMod.LOGGER.error("Не удалось перезагрузить VAuction.toml", e);
+            context.getSource().sendFailure(AuctionLang.component("chat.config_reload_failed"));
+            return 0;
+        }
         boolean loaded = AuctionLang.load();
         com.valorcraft.vauction.ui.AuctionCategory.clearCache();
-        context.getSource().sendSuccess(() -> AuctionLang.component(loaded ? "chat.reload" : "chat.reload_failed"), false);
+        VAuctionMod.service().invalidateCaches();
+        for (ServerPlayer player : context.getSource().getServer().getPlayerList().getPlayers()) {
+            if (player.containerMenu instanceof com.valorcraft.vauction.ui.ReloadableMenu menu) menu.refreshConfig();
+        }
+        if (loaded) context.getSource().sendSuccess(() -> AuctionLang.component("chat.config_reload"), false);
+        else context.getSource().sendFailure(AuctionLang.component("chat.config_reload_partial"));
         return loaded ? 1 : 0;
     }
 

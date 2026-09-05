@@ -18,7 +18,7 @@ import java.util.Set;
 import java.util.UUID;
 import java.util.concurrent.ConcurrentHashMap;
 
-public final class UserAuctionsMenu extends AbstractContainerMenu {
+public final class UserAuctionsMenu extends AbstractContainerMenu implements ReloadableMenu {
     private static final Set<UserAuctionsMenu> OPEN_MENUS = ConcurrentHashMap.newKeySet();
     public enum Mode { ACTIVE, ARCHIVE, HISTORY, PLAYER }
     private final SimpleContainer display = new SimpleContainer(54);
@@ -54,6 +54,8 @@ public final class UserAuctionsMenu extends AbstractContainerMenu {
         p.openMenu(new SimpleMenuProvider((id, inv, ignored) -> new UserAuctionsMenu(id, inv, s, mode, page, returnMode, targetName),
                 AuctionLang.component(title, "page", shown + 1, "pages", pages, "player", targetName)));
     }
+    @Override public void refreshConfig() { rebuild(); broadcastChanges(); }
+
     private void rebuild() {
         entries = switch (mode) { case ACTIVE -> service.myListings(viewer.getUUID()); case ARCHIVE -> service.archive(viewer.getUUID());
             case HISTORY -> service.salesHistory(viewer.getUUID());

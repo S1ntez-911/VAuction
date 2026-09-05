@@ -14,7 +14,7 @@ import net.minecraft.world.inventory.*;
 import net.minecraft.world.item.*;
 
 /** Exact TM2-style 3x9 confirmation: green left, preview center, red right. */
-public final class ConfirmMenu extends AbstractContainerMenu {
+public final class ConfirmMenu extends AbstractContainerMenu implements ReloadableMenu {
     private static final int[] YES = {0,1,2,9,10,11,18,19,20};
     private static final int[] NO = {6,7,8,15,16,17,24,25,26};
     private final SimpleContainer display = new SimpleContainer(27);
@@ -22,16 +22,25 @@ public final class ConfirmMenu extends AbstractContainerMenu {
     private final Runnable accept;
     private final Runnable back;
     private long lastClickAt;
+    private final ItemStack preview;
+    private final Component yesName;
+    private final Component noName;
 
     private ConfirmMenu(int id, Inventory inv, ItemStack preview, Component yesName, Component noName, Runnable accept, Runnable back) {
         super(MenuType.GENERIC_9x3, id); viewer = (ServerPlayer) inv.player; this.accept = accept; this.back = back;
+        this.preview = preview.copy(); this.yesName = yesName; this.noName = noName;
         MenuSupport.slots(this::addSlot, display, inv, 3);
+        refreshConfig();
+    }
+
+    @Override public void refreshConfig() {
         ItemStack yes = MenuSupport.icon(MenuSupport.configured(AuctionConfig.CONFIRM_YES_ITEM, Items.LIME_STAINED_GLASS_PANE), yesName);
         ItemStack no = MenuSupport.icon(MenuSupport.configured(AuctionConfig.CONFIRM_NO_ITEM, Items.RED_STAINED_GLASS_PANE), noName);
         ItemStack neutral = MenuSupport.icon(MenuSupport.configured(AuctionConfig.CONFIRM_BACKGROUND_ITEM, Items.LIGHT_GRAY_STAINED_GLASS_PANE), Component.literal(" "));
         for (int i = 0; i < 27; i++) display.setItem(i, neutral.copy());
         for (int i : YES) display.setItem(i, yes.copy()); for (int i : NO) display.setItem(i, no.copy());
         display.setItem(13, preview.copy());
+        broadcastChanges();
     }
 
     public static void openListing(ServerPlayer p, AuctionService s, AuctionListing listing, boolean cancel, Runnable back) {

@@ -153,4 +153,28 @@ public final class AuctionConfig {
     }
 
     private AuctionConfig() {}
+
+    /** Reload only our registered config, preserving Forge's file watcher and clearing value caches. */
+    public static void reload() {
+        var config = net.minecraftforge.fml.config.ConfigTracker.INSTANCE.fileMap()
+                .get("VMods/VAuction/VAuction.toml");
+        if (config == null || !(config.getConfigData() instanceof com.electronwill.nightconfig.core.file.CommentedFileConfig file))
+            throw new IllegalStateException("VAuction config is not loaded");
+        if (!java.nio.file.Files.isRegularFile(config.getFullPath()))
+            throw new IllegalStateException("VAuction.toml does not exist");
+        // Parse and validate separately before touching the active configuration.
+        try (var candidate = com.electronwill.nightconfig.core.file.CommentedFileConfig.builder(config.getFullPath()).sync().build()) {
+            candidate.load();
+            validateReload(candidate);
+        }
+        file.load();
+        SPEC.afterReload();
+    }
+
+    static void validateReload(com.electronwill.nightconfig.core.CommentedConfig candidate) {
+        // Comment edits are harmless; only corrections to actual values reject the reload.
+        SPEC.correct(candidate, (action, path, oldValue, newValue) -> {
+            throw new IllegalArgumentException("Invalid or missing VAuction setting: " + String.join(".", path));
+        });
+    }
 }

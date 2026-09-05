@@ -853,7 +853,7 @@ public final class AuctionService {
                 .toLowerCase(java.util.Locale.ROOT);
     }
 
-    private void invalidateCaches() {
+    public void invalidateCaches() {
         browseCache.clear();
         userCache.clear();
     }

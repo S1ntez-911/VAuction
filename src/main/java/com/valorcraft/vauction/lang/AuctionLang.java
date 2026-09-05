@@ -131,6 +131,9 @@ public final class AuctionLang {
         d.put("error.storage_unavailable", "&cАукцион временно недоступен: хранилище не запущено. Сообщите администрации.");
         d.put("chat.list.empty", "&eУ вас нет активных лотов."); d.put("chat.list.title", "&6Ваши активные лоты:");
         d.put("chat.list.entry", "&7{id} • {item} x{count} • {price}");
+        d.put("chat.config_reload", "&aКонфигурация и локализация VAuction перезагружены. Иконки открытых меню обновлены.");
+        d.put("chat.config_reload_failed", "&cНе удалось загрузить VAuction.toml: проверьте конфиг и журнал сервера.");
+        d.put("chat.config_reload_partial", "&eКонфигурация VAuction обновлена, но локализация не загружена: проверьте JSON и журнал сервера.");
         d.put("chat.reload", "&aЛокализация VAuction перезагружена.");
         d.put("chat.reload_failed", "&cЛокализация не загружена: проверьте JSON и журнал сервера.");
         d.put("chat.archive_waiting", "&eВ архиве VAuction ожидают предметы: {count}. /ah claim");

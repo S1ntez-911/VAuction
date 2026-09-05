@@ -19,7 +19,7 @@ import java.util.List;
 import java.util.*;
 import java.util.concurrent.ConcurrentHashMap;
 
-public final class AuctionMenu extends AbstractContainerMenu {
+public final class AuctionMenu extends AbstractContainerMenu implements ReloadableMenu {
     private static final int PAGE_SIZE = 45;
     private static final Map<UUID, AuctionViewState> SAVED_FILTERS = new ConcurrentHashMap<>();
     private static final Set<AuctionMenu> OPEN_MENUS = ConcurrentHashMap.newKeySet();
@@ -66,6 +66,8 @@ public final class AuctionMenu extends AbstractContainerMenu {
         p.openMenu(new SimpleMenuProvider((id, inv, ignored) -> new AuctionMenu(id, inv, s, page, category, sort, search, seller),
                 AuctionLang.component(titleKey, "page", shownPage + 1, "pages", pages, "player", seller)));
     }
+
+    @Override public void refreshConfig() { rebuild(); broadcastChanges(); }
 
     private void rebuild() {
         listings = service.browse(viewer.getUUID(), category, sort, search, seller);
